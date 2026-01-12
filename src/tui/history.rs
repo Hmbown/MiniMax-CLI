@@ -982,7 +982,7 @@ fn status_symbol(started_at: Option<Instant>, status: ToolStatus) -> String {
     match status {
         ToolStatus::Running => {
             let elapsed_ms = started_at.map_or(0, |t| t.elapsed().as_millis());
-            if (elapsed_ms / 400) % 2 == 0 {
+            if (elapsed_ms / 400).is_multiple_of(2) {
                 "*".to_string()
             } else {
                 ".".to_string()

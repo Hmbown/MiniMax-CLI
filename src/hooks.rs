@@ -95,7 +95,7 @@ pub struct Hook {
     /// The event that triggers this hook
     pub event: HookEvent,
 
-    /// Shell command to execute (runs via `sh -c "<command>"`)
+    /// Shell command to execute (platform shell: `sh -c` on Unix, `cmd /C` on Windows)
     pub command: String,
 
     /// Optional condition for when this hook should run
@@ -395,6 +395,21 @@ pub struct HookExecutor {
 }
 
 impl HookExecutor {
+    fn build_shell_command(command: &str) -> Command {
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg(command);
+            cmd
+        }
+        #[cfg(not(windows))]
+        {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(command);
+            cmd
+        }
+    }
+
     /// Create a new `HookExecutor` with configuration
     pub fn new(config: HooksConfig, default_working_dir: PathBuf) -> Self {
         // Generate a session ID
@@ -521,9 +536,7 @@ impl HookExecutor {
             .default_timeout_secs
             .unwrap_or(hook.timeout_secs);
 
-        let result = Command::new("sh")
-            .arg("-c")
-            .arg(&hook.command)
+        let result = Self::build_shell_command(&hook.command)
             .current_dir(&working_dir)
             .envs(env_vars)
             .output();
@@ -565,9 +578,7 @@ impl HookExecutor {
 
         // Spawn in a detached thread
         std::thread::spawn(move || {
-            let _ = Command::new("sh")
-                .arg("-c")
-                .arg(&cmd)
+            let _ = HookExecutor::build_shell_command(&cmd)
                 .current_dir(&wd)
                 .envs(&env)
                 .output();

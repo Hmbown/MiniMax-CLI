@@ -72,11 +72,16 @@ pub struct CommandSpec {
 }
 
 impl CommandSpec {
-    /// Create a `CommandSpec` for running a shell command via sh -c.
+    /// Create a `CommandSpec` for running a shell command via the platform shell.
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
+        #[cfg(windows)]
+        let (program, args) = ("cmd".to_string(), vec!["/C".to_string(), command.to_string()]);
+        #[cfg(not(windows))]
+        let (program, args) = ("sh".to_string(), vec!["-c".to_string(), command.to_string()]);
+
         Self {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string(), command.to_string()],
+            program,
+            args,
             cwd,
             env: HashMap::new(),
             timeout,
@@ -388,6 +393,9 @@ impl SandboxManager {
     /// This helps distinguish between legitimate command failures and
     /// sandbox-blocked operations.
     pub fn was_denied(sandbox_type: SandboxType, exit_code: i32, stderr: &str) -> bool {
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = (exit_code, stderr);
+
         match sandbox_type {
             SandboxType::None => false,
 
@@ -401,6 +409,9 @@ impl SandboxManager {
 
     /// Get a human-readable description of why a command was blocked.
     pub fn denial_message(sandbox_type: SandboxType, stderr: &str) -> String {
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = stderr;
+
         match sandbox_type {
             SandboxType::None => "Command failed (no sandbox)".to_string(),
 
@@ -438,12 +449,31 @@ impl SandboxManager {
 mod tests {
     use super::*;
 
+    fn expected_shell_command(command: &str) -> Vec<String> {
+        #[cfg(windows)]
+        {
+            vec!["cmd".to_string(), "/C".to_string(), command.to_string()]
+        }
+        #[cfg(not(windows))]
+        {
+            vec!["sh".to_string(), "-c".to_string(), command.to_string()]
+        }
+    }
+
     #[test]
     fn test_command_spec_shell() {
         let spec = CommandSpec::shell("echo hello", PathBuf::from("/tmp"), Duration::from_secs(30));
 
-        assert_eq!(spec.program, "sh");
-        assert_eq!(spec.args, vec!["-c", "echo hello"]);
+        #[cfg(windows)]
+        {
+            assert_eq!(spec.program, "cmd");
+            assert_eq!(spec.args, vec!["/C", "echo hello"]);
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(spec.program, "sh");
+            assert_eq!(spec.args, vec!["-c", "echo hello"]);
+        }
         assert_eq!(spec.display_command(), "echo hello");
     }
 
@@ -502,7 +532,7 @@ mod tests {
         let env = manager.prepare(&spec);
 
         assert_eq!(env.sandbox_type, SandboxType::None);
-        assert_eq!(env.command, vec!["sh", "-c", "echo test"]);
+        assert_eq!(env.command, expected_shell_command("echo test"));
         assert!(!env.is_sandboxed());
     }
 

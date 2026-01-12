@@ -733,13 +733,41 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn echo_command(message: &str) -> String {
+        format!("echo {message}")
+    }
+
+    fn sleep_command(seconds: u64) -> String {
+        #[cfg(windows)]
+        {
+            format!("timeout /T {seconds} /NOBREAK > NUL")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("sleep {seconds}")
+        }
+    }
+
+    fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
+        #[cfg(windows)]
+        {
+            format!(
+                "timeout /T {seconds} /NOBREAK > NUL && echo {message}"
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            format!("sleep {seconds} && echo {message}")
+        }
+    }
+
     #[test]
     fn test_sync_execution() {
         let tmp = tempdir().expect("tempdir");
         let mut manager = ShellManager::new(tmp.path().to_path_buf());
 
         let result = manager
-            .execute("echo hello", None, 5000, false)
+            .execute(&echo_command("hello"), None, 5000, false)
             .expect("execute");
 
         assert_eq!(result.status, ShellStatus::Completed);
@@ -753,7 +781,7 @@ mod tests {
         let mut manager = ShellManager::new(tmp.path().to_path_buf());
 
         let result = manager
-            .execute("sleep 0.1 && echo done", None, 5000, true)
+            .execute(&sleep_then_echo_command(1, "done"), None, 5000, true)
             .expect("execute");
 
         assert_eq!(result.status, ShellStatus::Running);
@@ -776,7 +804,7 @@ mod tests {
         let mut manager = ShellManager::new(tmp.path().to_path_buf());
 
         let result = manager
-            .execute("sleep 10", None, 1000, false)
+            .execute(&sleep_command(10), None, 1000, false)
             .expect("execute");
 
         assert_eq!(result.status, ShellStatus::TimedOut);
@@ -788,7 +816,7 @@ mod tests {
         let mut manager = ShellManager::new(tmp.path().to_path_buf());
 
         let result = manager
-            .execute("sleep 60", None, 5000, true)
+            .execute(&sleep_command(60), None, 5000, true)
             .expect("execute");
 
         let task_id = result.task_id.unwrap();
