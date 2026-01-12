@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow for linting and testing
 - Crates.io publish workflow
 - CONTRIBUTING.md with development guidelines
-- ARCHITECTURE.md with system overview
+- docs/ARCHITECTURE.md with system overview
 - Shell completion support (`minimax completions`)
 - `--doctor` command for system diagnostics
 

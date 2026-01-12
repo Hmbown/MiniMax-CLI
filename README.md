@@ -10,7 +10,6 @@ Terminal-native agent for MiniMax M2.1: tools, skills, media, and fast workflows
 
 ## Demo
 
-![MiniMax CLI demo](assets/demo.gif)
 
 ## Quickstart
 
@@ -122,11 +121,11 @@ Sample skills live in `skills/`. Activate them in the TUI with `/skill <name>`.
 
 ## Docs
 
-- `TUI_UPGRADES.md` - UI changes and enhancements
+- `docs/TUI_UPGRADES.md` - UI changes and enhancements
 - `CODEX_MAIN_UI_UX_PARITY_CHECKLIST.md` - parity checklist
-- `ARCHITECTURE.md` - system overview
+- `docs/ARCHITECTURE.md` - system overview
 - `LAUNCH_CHECKLIST.md` - release readiness checklist
-- `VOICE_AND_TONE.md` - CLI personality guidelines
+- `docs/VOICE_AND_TONE.md` - CLI personality guidelines
 
 ## Contributing
 

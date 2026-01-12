@@ -75,9 +75,15 @@ impl CommandSpec {
     /// Create a `CommandSpec` for running a shell command via the platform shell.
     pub fn shell(command: &str, cwd: PathBuf, timeout: Duration) -> Self {
         #[cfg(windows)]
-        let (program, args) = ("cmd".to_string(), vec!["/C".to_string(), command.to_string()]);
+        let (program, args) = (
+            "cmd".to_string(),
+            vec!["/C".to_string(), command.to_string()],
+        );
         #[cfg(not(windows))]
-        let (program, args) = ("sh".to_string(), vec!["-c".to_string(), command.to_string()]);
+        let (program, args) = (
+            "sh".to_string(),
+            vec!["-c".to_string(), command.to_string()],
+        );
 
         Self {
             program,

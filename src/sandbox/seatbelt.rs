@@ -20,6 +20,8 @@
 
 use super::policy::SandboxPolicy;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 
 /// Path to the sandbox-exec binary on macOS.
 pub const SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
@@ -87,9 +89,24 @@ const SEATBELT_NETWORK_POLICY: &str = r"
 (allow network-bind)
 ";
 
-/// Check if sandbox-exec is available on this system.
+/// Check if sandbox-exec is available and permitted on this system.
 pub fn is_available() -> bool {
-    Path::new(SANDBOX_EXEC_PATH).exists()
+    static SEATBELT_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *SEATBELT_AVAILABLE.get_or_init(|| {
+        if !Path::new(SANDBOX_EXEC_PATH).exists() {
+            return false;
+        }
+
+        let output = Command::new(SANDBOX_EXEC_PATH)
+            .args(["-p", "(version 1)(allow default)", "--", "/usr/bin/true"])
+            .output();
+
+        match output {
+            Ok(result) => result.status.success(),
+            Err(_) => false,
+        }
+    })
 }
 
 /// Create the command-line arguments for sandbox-exec.

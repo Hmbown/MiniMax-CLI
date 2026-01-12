@@ -740,7 +740,11 @@ mod tests {
     fn sleep_command(seconds: u64) -> String {
         #[cfg(windows)]
         {
-            format!("timeout /T {seconds} /NOBREAK > NUL")
+            let ping_count = seconds.saturating_add(1);
+            let ps_path = r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"#;
+            format!(
+                "\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}\" || ping 127.0.0.1 -n {ping_count} > NUL"
+            )
         }
         #[cfg(not(windows))]
         {
@@ -751,8 +755,10 @@ mod tests {
     fn sleep_then_echo_command(seconds: u64, message: &str) -> String {
         #[cfg(windows)]
         {
+            let ping_count = seconds.saturating_add(1);
+            let ps_path = r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"#;
             format!(
-                "timeout /T {seconds} /NOBREAK > NUL && echo {message}"
+                "\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}; Write-Output {message}\" || (ping 127.0.0.1 -n {ping_count} > NUL && echo {message})"
             )
         }
         #[cfg(not(windows))]
