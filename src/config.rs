@@ -244,6 +244,11 @@ impl Config {
 // === Defaults ===
 
 fn default_config_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("MINIMAX_CONFIG_PATH") {
+        if !path.trim().is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
     dirs::home_dir().map(|home| home.join(".minimax").join("config.toml"))
 }
 
@@ -435,21 +440,27 @@ mod tests {
     struct EnvGuard {
         home: Option<OsString>,
         userprofile: Option<OsString>,
+        minimax_config_path: Option<OsString>,
     }
 
     impl EnvGuard {
         fn new(home: &Path) -> Self {
             let home_str = OsString::from(home.as_os_str());
+            let config_path = home.join(".minimax").join("config.toml");
+            let config_str = OsString::from(config_path.as_os_str());
             let home_prev = env::var_os("HOME");
             let userprofile_prev = env::var_os("USERPROFILE");
+            let minimax_config_prev = env::var_os("MINIMAX_CONFIG_PATH");
             // Safety: test-only environment mutation guarded by a global mutex.
             unsafe {
                 env::set_var("HOME", &home_str);
                 env::set_var("USERPROFILE", &home_str);
+                env::set_var("MINIMAX_CONFIG_PATH", &config_str);
             }
             Self {
                 home: home_prev,
                 userprofile: userprofile_prev,
+                minimax_config_path: minimax_config_prev,
             }
         }
     }
@@ -476,6 +487,17 @@ mod tests {
                 // Safety: test-only environment mutation guarded by a global mutex.
                 unsafe {
                     env::remove_var("USERPROFILE");
+                }
+            }
+            if let Some(value) = self.minimax_config_path.take() {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::set_var("MINIMAX_CONFIG_PATH", value);
+                }
+            } else {
+                // Safety: test-only environment mutation guarded by a global mutex.
+                unsafe {
+                    env::remove_var("MINIMAX_CONFIG_PATH");
                 }
             }
         }

@@ -138,6 +138,11 @@ impl CommandSpec {
         if self.program == "sh" && self.args.len() == 2 && self.args[0] == "-c" {
             // For shell commands, show the actual command
             self.args[1].clone()
+        } else if self.program.eq_ignore_ascii_case("cmd")
+            && self.args.len() == 2
+            && self.args[0].eq_ignore_ascii_case("/C")
+        {
+            self.args[1].clone()
         } else {
             // For other commands, join program and args
             let mut parts = vec![self.program.clone()];
