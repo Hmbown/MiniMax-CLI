@@ -385,7 +385,7 @@ pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
             let content = load_context_from_stdin_or_error(&args.context_id)?;
             let ctx = RlmContext::new(&args.context_id, content, None);
 
-            let result = execute_expr(&ctx, &args.code)?;
+            let result = eval_expr(&ctx, &args.code)?;
             println!("{result}");
         }
         RlmCommand::Status(args) => {
@@ -425,7 +425,14 @@ fn load_context_from_stdin_or_error(context_id: &str) -> Result<String> {
     )
 }
 
-fn execute_expr(ctx: &RlmContext, code: &str) -> Result<String> {
+pub fn eval_in_session(session: &RlmSession, code: &str) -> Result<String> {
+    let ctx = session
+        .get_context(&session.active_context)
+        .context("No context loaded. Use /load <path> first.")?;
+    eval_expr(ctx, code)
+}
+
+pub fn eval_expr(ctx: &RlmContext, code: &str) -> Result<String> {
     // Simple expression evaluator for RLM
     // Supports: len(ctx), lines(start, end), search("pattern"), peek(start, end), chunk(size)
     let code = code.trim();
@@ -449,14 +456,10 @@ fn execute_expr(ctx: &RlmContext, code: &str) -> Result<String> {
     if code.starts_with("lines(") && code.ends_with(')') {
         let args = &code[6..code.len() - 1];
         let parts: Vec<&str> = args.split(',').map(str::trim).collect();
-        let start: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let end: Option<usize> = parts.get(1).and_then(|s| s.parse().ok());
-        let lines = ctx.lines(start, end);
-        return Ok(lines
-            .iter()
-            .map(|(n, l)| format!("{n:>5} {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"));
+        let start_line = parse_line_arg(parts.first(), 1);
+        let end_line = parse_line_arg_opt(parts.get(1).copied());
+        let lines = format_lines(ctx, start_line, end_line);
+        return Ok(lines);
     }
 
     if code.starts_with("search(") && code.ends_with(')') {
@@ -494,27 +497,42 @@ fn execute_expr(ctx: &RlmContext, code: &str) -> Result<String> {
     }
 
     if code == "head" || code == "head()" {
-        let lines = ctx.lines(0, Some(10));
-        return Ok(lines
-            .iter()
-            .map(|(n, l)| format!("{n:>5} {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"));
+        return Ok(format_lines(ctx, 1, Some(10)));
     }
 
     if code == "tail" || code == "tail()" {
-        let start = ctx.line_count.saturating_sub(10);
-        let lines = ctx.lines(start, None);
-        return Ok(lines
-            .iter()
-            .map(|(n, l)| format!("{n:>5} {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"));
+        let start_line = ctx.line_count.saturating_sub(9).max(1);
+        return Ok(format_lines(ctx, start_line, None));
     }
 
     anyhow::bail!(
         "Failed to evaluate expression: unknown expression '{code}'. Supported: len, line_count, peek(start, end), lines(start, end), search(pattern), chunk(size, overlap), head, tail"
     )
+}
+
+fn parse_line_arg(input: Option<&&str>, default: usize) -> usize {
+    input
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
+        .max(1)
+}
+
+fn parse_line_arg_opt(input: Option<&str>) -> Option<usize> {
+    let value = input.and_then(|s| s.parse::<usize>().ok())?;
+    Some(value.max(1))
+}
+
+fn format_lines(ctx: &RlmContext, start_line: usize, end_line: Option<usize>) -> String {
+    let start_line = start_line.max(1);
+    let end_line = end_line.unwrap_or(ctx.line_count).max(start_line);
+    let start_idx = start_line.saturating_sub(1);
+    let end_idx = end_line.min(ctx.line_count);
+    let lines = ctx.lines(start_idx, Some(end_idx));
+    lines
+        .iter()
+        .map(|(n, l)| format!("{n:>5} {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<()> {
@@ -602,7 +620,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
 
                 // Execute expression
                 if let Some(ctx) = session.get_context(context_id) {
-                    match execute_expr(ctx, input) {
+                    match eval_expr(ctx, input) {
                         Ok(result) => println!("{result}"),
                         Err(e) => println!("{}: {}", "Error".red(), e),
                     }
@@ -678,16 +696,16 @@ mod tests {
             .join("\n");
         let ctx = RlmContext::new("test", content, None);
 
-        let len_output = execute_expr(&ctx, "len")?;
+        let len_output = eval_expr(&ctx, "len")?;
         assert_eq!(len_output, ctx.char_count.to_string());
 
-        let head_output = execute_expr(&ctx, "head")?;
+        let head_output = eval_expr(&ctx, "head")?;
         assert_eq!(head_output, format_lines(1, 10));
 
-        let tail_output = execute_expr(&ctx, "tail")?;
+        let tail_output = eval_expr(&ctx, "tail")?;
         assert_eq!(tail_output, format_lines(6, 15));
 
-        let lines_output = execute_expr(&ctx, "lines(0, 10)")?;
+        let lines_output = eval_expr(&ctx, "lines(1, 10)")?;
         assert_eq!(lines_output, format_lines(1, 10));
 
         Ok(())

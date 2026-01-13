@@ -5,7 +5,7 @@ use std::fmt::Write;
 use crate::tools::plan::PlanState;
 use crate::tui::app::{App, AppAction, AppMode};
 
-use super::CommandResult;
+use super::{CommandResult, rlm};
 
 /// Show help information
 pub fn help(app: &mut App, topic: Option<&str>) -> CommandResult {
@@ -63,7 +63,13 @@ pub fn mode(app: &mut App, mode_name: Option<&str>) -> CommandResult {
         match new_mode {
             Some(m) => {
                 app.set_mode(m);
-                CommandResult::message(format!("Switched to {} mode", m.label()))
+                if m == AppMode::Rlm {
+                    let mut msg = String::from("Switched to RLM mode.\n");
+                    msg.push_str(&rlm::welcome_message());
+                    CommandResult::message(msg)
+                } else {
+                    CommandResult::message(format!("Switched to {} mode", m.label()))
+                }
             }
             None => CommandResult::error(format!(
                 "Unknown mode: {mode_str}. Use: normal, edit, agent, plan, rlm"

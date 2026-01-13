@@ -8,10 +8,11 @@ mod core;
 mod debug;
 mod init;
 mod queue;
+mod rlm;
 mod session;
 mod skills;
 
-use crate::tui::app::{App, AppAction};
+use crate::tui::app::{App, AppAction, AppMode};
 
 /// Result of executing a command
 #[derive(Debug, Clone)]
@@ -135,8 +136,26 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "load",
         aliases: &[],
-        description: "Load session from file",
+        description: "Load session from file (or RLM context in RLM mode)",
         usage: "/load [path]",
+    },
+    CommandInfo {
+        name: "save-session",
+        aliases: &["save_session"],
+        description: "Save RLM session to file",
+        usage: "/save-session [path]",
+    },
+    CommandInfo {
+        name: "status",
+        aliases: &[],
+        description: "Show RLM context status",
+        usage: "/status",
+    },
+    CommandInfo {
+        name: "repl",
+        aliases: &[],
+        description: "Enter RLM REPL mode",
+        usage: "/repl",
     },
     CommandInfo {
         name: "compact",
@@ -267,7 +286,16 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
 
         // Session commands
         "save" => session::save(app, arg),
-        "load" => session::load(app, arg),
+        "load" => {
+            if app.mode == AppMode::Rlm {
+                rlm::load(app, arg)
+            } else {
+                session::load(app, arg)
+            }
+        }
+        "save-session" | "save_session" => rlm::save_session(app, arg),
+        "status" => rlm::status(app),
+        "repl" => rlm::repl(app),
         "compact" => session::compact(app),
         "export" => session::export(app, arg),
 

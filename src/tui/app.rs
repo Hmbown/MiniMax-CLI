@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::config::{Config, has_api_key, save_api_key};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::models::{Message, SystemPrompt};
+use crate::rlm::RlmSession;
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tui::approval::{ApprovalMode, ApprovalState};
@@ -152,6 +153,8 @@ pub struct App {
     pub project_doc: Option<String>,
     /// Plan state for tracking tasks
     pub plan_state: SharedPlanState,
+    /// RLM sandbox session state
+    pub rlm_session: RlmSession,
     /// Todo list for `TodoWriteTool`
     #[allow(dead_code)] // For future engine integration
     pub todos: SharedTodoList,
@@ -348,6 +351,7 @@ impl App {
             trust_mode: false,
             project_doc: None,
             plan_state,
+            rlm_session: RlmSession::default(),
             todos: new_shared_todo_list(),
             tool_log: Vec::new(),
             session_cost: 0.0,

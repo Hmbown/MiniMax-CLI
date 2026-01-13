@@ -33,6 +33,7 @@ use crate::core::ops::Op;
 use crate::hooks::HookEvent;
 use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
 use crate::prompts;
+use crate::rlm;
 use crate::session_manager::{SessionManager, create_saved_session, update_session};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
@@ -708,20 +709,24 @@ async fn run_event_loop(
                                 }
                             }
                         } else {
-                            let queued = if let Some(mut draft) = app.queued_draft.take() {
-                                draft.display = input;
-                                draft
+                            if app.mode == AppMode::Rlm {
+                                handle_rlm_input(app, input);
                             } else {
-                                build_queued_message(app, input)
-                            };
-                            if app.is_loading {
-                                app.queue_message(queued);
-                                app.status_message = Some(format!(
-                                    "Queued {} message(s) - /queue to view/edit",
-                                    app.queued_message_count()
-                                ));
-                            } else {
-                                dispatch_user_message(app, &engine_handle, queued).await?;
+                                let queued = if let Some(mut draft) = app.queued_draft.take() {
+                                    draft.display = input;
+                                    draft
+                                } else {
+                                    build_queued_message(app, input)
+                                };
+                                if app.is_loading {
+                                    app.queue_message(queued);
+                                    app.status_message = Some(format!(
+                                        "Queued {} message(s) - /queue to view/edit",
+                                        app.queued_message_count()
+                                    ));
+                                } else {
+                                    dispatch_user_message(app, &engine_handle, queued).await?;
+                                }
                             }
                         }
                     }
@@ -830,6 +835,26 @@ async fn dispatch_user_message(
     Ok(())
 }
 
+fn handle_rlm_input(app: &mut App, input: String) {
+    app.add_message(HistoryCell::User {
+        content: input.clone(),
+    });
+
+    let content = match rlm::eval_in_session(&app.rlm_session, &input) {
+        Ok(result) => {
+            let trimmed = result.trim();
+            if trimmed.is_empty() {
+                "RLM: (no output)".to_string()
+            } else {
+                format!("RLM:\n{result}")
+            }
+        }
+        Err(err) => format!("RLM error: {err}"),
+    };
+
+    app.add_message(HistoryCell::System { content });
+}
+
 fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
@@ -841,12 +866,21 @@ fn render(f: &mut Frame, app: &mut App) {
 
     let footer_height = 1;
     let queued_preview = app.queued_message_previews(MAX_QUEUED_PREVIEW);
+    let queued_lines = if queued_preview.is_empty() {
+        0
+    } else {
+        queued_preview.len() + 1
+    };
+    let editing_lines = usize::from(app.queued_draft.is_some());
     let status_lines = usize::from(app.is_loading);
-    let status_height = u16::try_from(status_lines + queued_preview.len()).unwrap_or(u16::MAX);
+    let status_height =
+        u16::try_from(status_lines + queued_lines + editing_lines).unwrap_or(u16::MAX);
+    let prompt = prompt_for_mode(app.mode);
     let composer_height = composer_height(
         &app.input,
         size.width,
         size.height.saturating_sub(footer_height + status_height),
+        prompt,
     );
 
     let chunks = Layout::default()
@@ -966,12 +1000,28 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
         lines.push(Line::from(spans));
     }
 
+    if let Some(draft) = app.queued_draft.as_ref() {
+        let available = area.width as usize;
+        let prefix = "Editing queued:";
+        let prefix_width = prefix.width() + 1;
+        let max_len = available.saturating_sub(prefix_width).max(1);
+        let preview = truncate_line_to_width(&draft.display, max_len);
+        lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+            Span::raw(" "),
+            Span::styled(preview, Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
     if !queued.is_empty() {
         let available = area.width as usize;
         let queued_count = app.queued_message_count();
-        let prefix = format!("Queued ({queued_count}):");
-        let prefix_width = prefix.width() + 1;
-        let max_len = available.saturating_sub(prefix_width).max(1);
+        let header = format!("Queued ({queued_count}) - /queue edit <n>");
+        let header = truncate_line_to_width(&header, available.max(1));
+        lines.push(Line::from(vec![Span::styled(
+            header,
+            Style::default().fg(Color::DarkGray),
+        )]));
 
         for (idx, message) in queued.iter().enumerate() {
             let label = if message.starts_with('+') {
@@ -979,12 +1029,11 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
             } else {
                 format!("{}. {message}", idx + 1)
             };
-            let preview = truncate_line_to_width(&label, max_len);
-            lines.push(Line::from(vec![
-                Span::styled(prefix.clone(), Style::default().fg(Color::DarkGray)),
-                Span::raw(" "),
-                Span::styled(preview, Style::default().fg(Color::Gray)),
-            ]));
+            let preview = truncate_line_to_width(&label, available.max(1));
+            lines.push(Line::from(vec![Span::styled(
+                preview,
+                Style::default().fg(Color::Gray),
+            )]));
         }
     }
 
@@ -993,7 +1042,7 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
 }
 
 fn render_composer(f: &mut Frame, area: Rect, app: &mut App) {
-    let prompt = "> ";
+    let prompt = prompt_for_mode(app.mode);
     let prompt_width = prompt.width();
     let prompt_width_u16 = u16::try_from(prompt_width).unwrap_or(u16::MAX);
     let content_width = usize::from(area.width.saturating_sub(prompt_width_u16).max(1));
@@ -1008,10 +1057,15 @@ fn render_composer(f: &mut Frame, area: Rect, app: &mut App) {
 
     let mut lines = Vec::new();
     if app.input.is_empty() {
+        let placeholder = if app.mode == AppMode::Rlm {
+            "Type an RLM expression or /help for commands..."
+        } else {
+            "Type a message or /help for commands..."
+        };
         lines.push(Line::from(vec![
             Span::styled(prompt, Style::default().fg(Color::Green).bold()),
             Span::styled(
-                "Type a message or /help for commands...",
+                placeholder,
                 Style::default().fg(Color::DarkGray).italic(),
             ),
         ]));
@@ -1044,7 +1098,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![
         Span::styled(
             format!("{} mode", app.mode.label()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(mode_color(app.mode)).bold(),
         ),
         Span::raw(" | "),
         Span::styled(context_indicator(app), Style::default().fg(Color::DarkGray)),
@@ -1053,7 +1107,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
-            format!("last prompt/response tokens: {prompt}/{completion}"),
+            format!("last tokens in/out: {prompt}/{completion}"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -1061,12 +1115,10 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let can_scroll = app.last_transcript_total > app.last_transcript_visible;
     if can_scroll {
         spans.push(Span::raw(" | "));
-        let hint = if should_scroll_with_arrows(app) {
-            "Up/Down scroll"
-        } else {
-            "Alt+Up/Down scroll"
-        };
-        spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "Alt+Up/Down scroll",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     if can_scroll && !matches!(app.transcript_scroll, TranscriptScroll::ToBottom) {
@@ -1105,8 +1157,25 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(footer, area);
 }
 
-fn composer_height(input: &str, width: u16, available_height: u16) -> u16 {
-    let prompt_width = "> ".width();
+fn mode_color(mode: AppMode) -> Color {
+    match mode {
+        AppMode::Normal => Color::Gray,
+        AppMode::Edit => Color::Blue,
+        AppMode::Agent => MINIMAX_RED,
+        AppMode::Plan => MINIMAX_ORANGE,
+        AppMode::Rlm => MINIMAX_CORAL,
+    }
+}
+
+fn prompt_for_mode(mode: AppMode) -> &'static str {
+    match mode {
+        AppMode::Rlm => "rlm> ",
+        _ => "> ",
+    }
+}
+
+fn composer_height(input: &str, width: u16, available_height: u16, prompt: &str) -> u16 {
+    let prompt_width = prompt.width();
     let prompt_width_u16 = u16::try_from(prompt_width).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prompt_width_u16).max(1));
     let mut line_count = wrap_input_lines(input, content_width).len();

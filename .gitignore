@@ -28,6 +28,8 @@ venv/
 ENV/
 env/
 .venv/
+*.egg-info/
+dist/
 
 # Logs
 *.log
