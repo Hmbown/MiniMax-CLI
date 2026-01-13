@@ -52,7 +52,7 @@ pub enum ToolCategory {
     FileWrite,
     /// Shell execution (`exec_shell`)
     Shell,
-    /// Paid multimedia APIs (`generate_image`, `generate_audio`, etc.)
+    /// Paid multimedia APIs (`generate_image`, `tts`, etc.)
     PaidMultimedia,
 }
 
@@ -94,13 +94,31 @@ impl ApprovalRequest {
 
 /// Get the category for a tool by name
 pub fn get_tool_category(name: &str) -> ToolCategory {
-    if matches!(name, "write_file" | "edit_file") {
+    if matches!(name, "write_file" | "edit_file" | "apply_patch") {
         ToolCategory::FileWrite
     } else if name == "exec_shell" {
         ToolCategory::Shell
     } else if matches!(
         name,
-        "generate_image" | "generate_audio" | "generate_video" | "generate_music" | "clone_voice"
+        "analyze_image"
+            | "generate_image"
+            | "generate_video"
+            | "generate_music"
+            | "tts"
+            | "tts_async_create"
+            | "tts_async_query"
+            | "voice_clone"
+            | "voice_list"
+            | "voice_delete"
+            | "voice_design"
+            | "upload_file"
+            | "list_files"
+            | "retrieve_file"
+            | "download_file"
+            | "delete_file"
+            | "query_video"
+            | "generate_video_template"
+            | "query_video_template"
     ) {
         ToolCategory::PaidMultimedia
     } else {

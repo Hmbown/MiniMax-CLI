@@ -15,16 +15,18 @@ use std::time::Instant;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::json;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::client::AnthropicClient;
 use crate::config::Config;
+use crate::mcp::McpPool;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool, Usage,
 };
 use crate::prompts;
 use crate::tools::plan::PlanState;
+use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentRuntime, SubAgentType, new_shared_subagent_manager,
 };
@@ -35,6 +37,7 @@ use crate::tui::app::AppMode;
 use super::events::Event;
 use super::ops::Op;
 use super::session::Session;
+use super::tool_parser;
 use super::turn::{TurnContext, TurnToolCall};
 
 // === Types ===
@@ -114,6 +117,7 @@ pub struct Engine {
     anthropic_client_error: Option<String>,
     session: Session,
     subagent_manager: SharedSubAgentManager,
+    mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
     rx_op: mpsc::Receiver<Op>,
     tx_event: mpsc::Sender<Event>,
     cancel_token: CancellationToken,
@@ -134,6 +138,123 @@ struct ToolUseState {
     name: String,
     input: serde_json::Value,
     input_buffer: String,
+}
+
+const TOOL_CALL_START_MARKERS: [&str; 5] = [
+    "[TOOL_CALL]",
+    "<minimax:tool_call",
+    "<tool_call",
+    "<invoke ",
+    "<function_calls>",
+];
+const TOOL_CALL_END_MARKERS: [&str; 5] = [
+    "[/TOOL_CALL]",
+    "</minimax:tool_call>",
+    "</tool_call>",
+    "</invoke>",
+    "</function_calls>",
+];
+
+fn find_first_marker(text: &str, markers: &[&str]) -> Option<(usize, usize)> {
+    markers
+        .iter()
+        .filter_map(|marker| text.find(marker).map(|idx| (idx, marker.len())))
+        .min_by_key(|(idx, _)| *idx)
+}
+
+fn filter_tool_call_delta(delta: &str, in_tool_call: &mut bool) -> String {
+    if delta.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    let mut rest = delta;
+
+    loop {
+        if *in_tool_call {
+            let Some((idx, len)) = find_first_marker(rest, &TOOL_CALL_END_MARKERS) else {
+                break;
+            };
+            rest = &rest[idx + len..];
+            *in_tool_call = false;
+        } else {
+            let Some((idx, len)) = find_first_marker(rest, &TOOL_CALL_START_MARKERS) else {
+                output.push_str(rest);
+                break;
+            };
+            output.push_str(&rest[..idx]);
+            rest = &rest[idx + len..];
+            *in_tool_call = true;
+        }
+    }
+
+    output
+}
+
+fn parse_tool_input(buffer: &str) -> Option<serde_json::Value> {
+    let trimmed = buffer.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(value);
+    }
+    if let Some(stripped) = strip_code_fences(trimmed)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&stripped)
+    {
+        return Some(value);
+    }
+    if let Ok(serde_json::Value::String(inner)) =
+        serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&inner)
+    {
+        return Some(value);
+    }
+    extract_json_segment(trimmed)
+        .and_then(|segment| serde_json::from_str::<serde_json::Value>(&segment).ok())
+}
+
+fn strip_code_fences(text: &str) -> Option<String> {
+    if !text.contains("```") {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            continue;
+        }
+        lines.push(line);
+    }
+    let stripped = lines.join("\n");
+    let stripped = stripped.trim();
+    if stripped.is_empty() {
+        None
+    } else {
+        Some(stripped.to_string())
+    }
+}
+
+fn extract_json_segment(text: &str) -> Option<String> {
+    extract_balanced_segment(text, '{', '}')
+        .or_else(|| extract_balanced_segment(text, '[', ']'))
+}
+
+fn extract_balanced_segment(text: &str, open: char, close: char) -> Option<String> {
+    let start = text.find(open)?;
+    let mut depth = 0i32;
+    let mut end = None;
+    for (offset, ch) in text[start..].char_indices() {
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 {
+                end = Some(start + offset + ch.len_utf8());
+                break;
+            }
+        }
+    }
+    end.map(|end_idx| text[start..end_idx].to_string())
 }
 
 impl Engine {
@@ -172,6 +293,7 @@ impl Engine {
             anthropic_client_error,
             session,
             subagent_manager,
+            mcp_pool: None,
             rx_op,
             tx_event,
             cancel_token: cancel_token.clone(),
@@ -191,8 +313,15 @@ impl Engine {
     pub async fn run(mut self) {
         while let Some(op) = self.rx_op.recv().await {
             match op {
-                Op::SendMessage { content, mode } => {
-                    self.handle_send_message(content, mode).await;
+                Op::SendMessage {
+                    content,
+                    mode,
+                    model,
+                    allow_shell,
+                    trust_mode,
+                } => {
+                    self.handle_send_message(content, mode, model, allow_shell, trust_mode)
+                        .await;
                 }
                 Op::CancelRequest => {
                     self.cancel_token.cancel();
@@ -315,7 +444,14 @@ impl Engine {
     }
 
     /// Handle a send message operation
-    async fn handle_send_message(&mut self, content: String, mode: AppMode) {
+    async fn handle_send_message(
+        &mut self,
+        content: String,
+        mode: AppMode,
+        model: String,
+        allow_shell: bool,
+        trust_mode: bool,
+    ) {
         // Emit turn started event
         let _ = self.tx_event.send(Event::TurnStarted).await;
 
@@ -343,43 +479,59 @@ impl Engine {
         // Create turn context
         let mut turn = TurnContext::new(self.config.max_steps);
 
-        // Build tool registry and tools if in agent or RLM mode
+        self.session.model = model;
+        self.config.model.clone_from(&self.session.model);
+        self.session.allow_shell = allow_shell;
+        self.config.allow_shell = allow_shell;
+        self.session.trust_mode = trust_mode;
+        self.config.trust_mode = trust_mode;
+
+        // Update system prompt to match the current mode
+        self.session.system_prompt =
+            Some(prompts::system_prompt_for_mode_with_context(mode, &self.config.workspace));
+
+        // Build tool registry and tool list for the current mode
         let todo_list = Arc::new(Mutex::new(TodoList::new()));
         let plan_state = Arc::new(Mutex::new(PlanState::default()));
 
-        let tool_registry = if matches!(mode, AppMode::Agent | AppMode::Rlm) {
-            let tool_context = self.build_tool_context();
-            let runtime = if let Some(client) = self.anthropic_client.clone() {
-                Some(SubAgentRuntime::new(
-                    client,
-                    self.session.model.clone(),
-                    tool_context.clone(),
-                    self.session.allow_shell,
-                    Some(self.tx_event.clone()),
-                ))
-            } else {
-                None
-            };
-            Some(
-                ToolRegistryBuilder::new()
-                    .with_full_agent_tools(
+        let tool_context = self.build_tool_context();
+        let builder = ToolRegistryBuilder::new().with_full_agent_tools(
+            self.session.allow_shell,
+            todo_list.clone(),
+            plan_state.clone(),
+        );
+
+        let tool_registry = match mode {
+            AppMode::Agent | AppMode::Rlm => {
+                let runtime = if let Some(client) = self.anthropic_client.clone() {
+                    Some(SubAgentRuntime::new(
+                        client,
+                        self.session.model.clone(),
+                        tool_context.clone(),
                         self.session.allow_shell,
-                        todo_list.clone(),
-                        plan_state.clone(),
-                    )
-                    .with_subagent_tools(
-                        self.subagent_manager.clone(),
-                        runtime.expect("sub-agent runtime should exist with active client"),
-                    )
-                    .build(tool_context),
-            )
-        } else {
-            None
+                        Some(self.tx_event.clone()),
+                    ))
+                } else {
+                    None
+                };
+                Some(
+                    builder
+                        .with_subagent_tools(
+                            self.subagent_manager.clone(),
+                            runtime.expect("sub-agent runtime should exist with active client"),
+                        )
+                        .build(tool_context),
+                )
+            }
+            _ => Some(builder.build(tool_context)),
         };
 
-        let tools = tool_registry
-            .as_ref()
-            .map(super::super::tools::registry::ToolRegistry::to_api_tools);
+        let mcp_tools = self.mcp_tools().await;
+        let tools = tool_registry.as_ref().map(|registry| {
+            let mut tools = registry.to_api_tools();
+            tools.extend(mcp_tools);
+            tools
+        });
 
         // Main turn loop
         self.handle_anthropic_turn(&mut turn, tool_registry.as_ref(), tools, mode)
@@ -404,6 +556,59 @@ impl Engine {
         )
     }
 
+    async fn ensure_mcp_pool(&mut self) -> Result<Arc<AsyncMutex<McpPool>>, ToolError> {
+        if let Some(pool) = self.mcp_pool.as_ref() {
+            return Ok(Arc::clone(pool));
+        }
+        let pool = McpPool::from_config_path(&self.session.mcp_config_path)
+            .map_err(|e| ToolError::execution_failed(format!("Failed to load MCP config: {e}")))?;
+        let pool = Arc::new(AsyncMutex::new(pool));
+        self.mcp_pool = Some(Arc::clone(&pool));
+        Ok(pool)
+    }
+
+    async fn mcp_tools(&mut self) -> Vec<Tool> {
+        let pool = match self.ensure_mcp_pool().await {
+            Ok(pool) => pool,
+            Err(err) => {
+                let _ = self
+                    .tx_event
+                    .send(Event::status(err.to_string()))
+                    .await;
+                return Vec::new();
+            }
+        };
+
+        let mut pool = pool.lock().await;
+        let errors = pool.connect_all().await;
+        for (server, err) in errors {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Failed to connect MCP server '{server}': {err}"
+                )))
+                .await;
+        }
+
+        pool.to_api_tools()
+    }
+
+    async fn execute_mcp_tool(
+        &mut self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<ToolResult, ToolError> {
+        let pool = self.ensure_mcp_pool().await?;
+        let mut pool = pool.lock().await;
+        let result = pool
+            .call_tool(name, input)
+            .await
+            .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
+        let content = serde_json::to_string_pretty(&result)
+            .unwrap_or_else(|_| result.to_string());
+        Ok(ToolResult::success(content))
+    }
+
     /// Handle a turn using the Anthropic API (original implementation)
     #[allow(clippy::too_many_lines)]
     async fn handle_anthropic_turn(
@@ -413,7 +618,10 @@ impl Engine {
         tools: Option<Vec<Tool>>,
         _mode: AppMode,
     ) {
-        let client = self.anthropic_client.as_ref().unwrap();
+        let client = self
+            .anthropic_client
+            .clone()
+            .expect("anthropic client should be configured");
 
         loop {
             if self.cancel_token.is_cancelled() {
@@ -461,7 +669,8 @@ impl Engine {
 
             // Track content blocks
             let mut content_blocks: Vec<ContentBlock> = Vec::new();
-            let mut current_text = String::new();
+            let mut current_text_raw = String::new();
+            let mut current_text_visible = String::new();
             let mut current_thinking = String::new();
             let mut tool_uses: Vec<ToolUseState> = Vec::new();
             let mut usage = Usage {
@@ -470,6 +679,9 @@ impl Engine {
             };
             let mut current_block_kind: Option<ContentBlockKind> = None;
             let mut current_tool_index: Option<usize> = None;
+            let mut in_tool_call_block = false;
+            let mut pending_message_complete = false;
+            let mut last_text_index: Option<usize> = None;
 
             // Process stream events
             while let Some(event_result) = stream.next().await {
@@ -494,8 +706,16 @@ impl Engine {
                         content_block,
                     } => match content_block {
                         ContentBlockStart::Text { text } => {
-                            current_text = text;
+                            current_text_raw = text;
+                            current_text_visible.clear();
+                            in_tool_call_block = false;
+                            let filtered = filter_tool_call_delta(
+                                &current_text_raw,
+                                &mut in_tool_call_block,
+                            );
+                            current_text_visible.push_str(&filtered);
                             current_block_kind = Some(ContentBlockKind::Text);
+                            last_text_index = Some(index as usize);
                             let _ = self
                                 .tx_event
                                 .send(Event::MessageStarted {
@@ -534,13 +754,15 @@ impl Engine {
                     },
                     StreamEvent::ContentBlockDelta { index, delta } => match delta {
                         Delta::TextDelta { text } => {
-                            current_text.push_str(&text);
-                            if !text.is_empty() {
+                            current_text_raw.push_str(&text);
+                            let filtered = filter_tool_call_delta(&text, &mut in_tool_call_block);
+                            if !filtered.is_empty() {
+                                current_text_visible.push_str(&filtered);
                                 let _ = self
                                     .tx_event
                                     .send(Event::MessageDelta {
                                         index: index as usize,
-                                        content: text,
+                                        content: filtered,
                                     })
                                     .await;
                             }
@@ -562,9 +784,7 @@ impl Engine {
                                 && let Some(tool_state) = tool_uses.get_mut(index)
                             {
                                 tool_state.input_buffer.push_str(&partial_json);
-                                if let Ok(value) = serde_json::from_str::<serde_json::Value>(
-                                    &tool_state.input_buffer,
-                                ) {
+                                if let Some(value) = parse_tool_input(&tool_state.input_buffer) {
                                     tool_state.input = value;
                                 }
                             }
@@ -574,12 +794,8 @@ impl Engine {
                         let stopped_kind = current_block_kind.take();
                         match stopped_kind {
                             Some(ContentBlockKind::Text) => {
-                                let _ = self
-                                    .tx_event
-                                    .send(Event::MessageComplete {
-                                        index: index as usize,
-                                    })
-                                    .await;
+                                pending_message_complete = true;
+                                last_text_index = Some(index as usize);
                             }
                             Some(ContentBlockKind::Thinking) => {
                                 let _ = self
@@ -595,20 +811,9 @@ impl Engine {
                             && let Some(index) = current_tool_index.take()
                             && let Some(tool_state) = tool_uses.get_mut(index)
                             && !tool_state.input_buffer.trim().is_empty()
+                            && let Some(value) = parse_tool_input(&tool_state.input_buffer)
                         {
-                            if let Ok(value) =
-                                serde_json::from_str::<serde_json::Value>(&tool_state.input_buffer)
-                            {
-                                tool_state.input = value;
-                            } else {
-                                let _ = self
-                                    .tx_event
-                                    .send(Event::status(format!(
-                                        "Failed to parse tool input JSON for {}",
-                                        tool_state.name
-                                    )))
-                                    .await;
-                            }
+                            tool_state.input = value;
                         }
                     }
                     StreamEvent::MessageDelta {
@@ -631,9 +836,31 @@ impl Engine {
                     thinking: current_thinking.clone(),
                 });
             }
-            if !current_text.is_empty() {
+            let mut final_text = current_text_visible.clone();
+            if tool_uses.is_empty() && tool_parser::has_tool_call_markers(&current_text_raw) {
+                let parsed = tool_parser::parse_tool_calls(&current_text_raw);
+                final_text = parsed.clean_text;
+                for call in parsed.tool_calls {
+                    let _ = self
+                        .tx_event
+                        .send(Event::ToolCallStarted {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                            input: call.args.clone(),
+                        })
+                        .await;
+                    tool_uses.push(ToolUseState {
+                        id: call.id,
+                        name: call.name,
+                        input: call.args,
+                        input_buffer: String::new(),
+                    });
+                }
+            }
+
+            if !final_text.is_empty() {
                 content_blocks.push(ContentBlock::Text {
-                    text: current_text.clone(),
+                    text: final_text,
                     cache_control: None,
                 });
             }
@@ -643,6 +870,14 @@ impl Engine {
                     name: tool.name.clone(),
                     input: tool.input.clone(),
                 });
+            }
+
+            if pending_message_complete {
+                let index = last_text_index.unwrap_or(0);
+                let _ = self
+                    .tx_event
+                    .send(Event::MessageComplete { index })
+                    .await;
             }
 
             // Add assistant message to session
@@ -659,63 +894,69 @@ impl Engine {
             }
 
             // Execute tools
-            if let Some(registry) = tool_registry {
-                for tool in &tool_uses {
-                    let tool_id = &tool.id;
-                    let tool_name = &tool.name;
-                    let tool_input = tool.input.clone();
-                    let start = Instant::now();
+            for tool in &tool_uses {
+                let tool_id = &tool.id;
+                let tool_name = &tool.name;
+                let tool_input = tool.input.clone();
+                let start = Instant::now();
 
-                    let result = registry.execute_full(tool_name, tool_input.clone()).await;
-                    let duration = start.elapsed();
+                let result = if McpPool::is_mcp_tool(tool_name) {
+                    self.execute_mcp_tool(tool_name, tool_input.clone()).await
+                } else if let Some(registry) = tool_registry {
+                    registry.execute_full(tool_name, tool_input.clone()).await
+                } else {
+                    Err(ToolError::not_available(format!(
+                        "tool '{tool_name}' is not registered"
+                    )))
+                };
+                let duration = start.elapsed();
 
-                    let mut tool_call =
-                        TurnToolCall::new(tool_id.clone(), tool_name.clone(), tool_input.clone());
+                let mut tool_call =
+                    TurnToolCall::new(tool_id.clone(), tool_name.clone(), tool_input.clone());
 
-                    match result {
-                        Ok(output) => {
-                            tool_call.set_result(output.content.clone(), duration);
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: Ok(output.clone()),
-                                })
-                                .await;
+                match result {
+                    Ok(output) => {
+                        tool_call.set_result(output.content.clone(), duration);
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: Ok(output.clone()),
+                            })
+                            .await;
 
-                            self.session.add_message(Message {
-                                role: "user".to_string(),
-                                content: vec![ContentBlock::ToolResult {
-                                    tool_use_id: tool_id.clone(),
-                                    content: output.content,
-                                }],
-                            });
-                        }
-                        Err(e) => {
-                            let error = e.to_string();
-                            tool_call.set_error(error.clone(), duration);
-                            let _ = self
-                                .tx_event
-                                .send(Event::ToolCallComplete {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    result: Err(e),
-                                })
-                                .await;
-
-                            self.session.add_message(Message {
-                                role: "user".to_string(),
-                                content: vec![ContentBlock::ToolResult {
-                                    tool_use_id: tool_id.clone(),
-                                    content: format!("Error: {error}"),
-                                }],
-                            });
-                        }
+                        self.session.add_message(Message {
+                            role: "user".to_string(),
+                            content: vec![ContentBlock::ToolResult {
+                                tool_use_id: tool_id.clone(),
+                                content: output.content,
+                            }],
+                        });
                     }
+                    Err(e) => {
+                        let error = e.to_string();
+                        tool_call.set_error(error.clone(), duration);
+                        let _ = self
+                            .tx_event
+                            .send(Event::ToolCallComplete {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                result: Err(e),
+                            })
+                            .await;
 
-                    turn.record_tool_call(tool_call);
+                        self.session.add_message(Message {
+                            role: "user".to_string(),
+                            content: vec![ContentBlock::ToolResult {
+                                tool_use_id: tool_id.clone(),
+                                content: format!("Error: {error}"),
+                            }],
+                        });
+                    }
                 }
+
+                turn.record_tool_call(tool_call);
             }
 
             turn.next_step();

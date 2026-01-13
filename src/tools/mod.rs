@@ -14,6 +14,7 @@ pub mod shell;
 pub mod spec;
 pub mod subagent;
 pub mod todo;
+pub mod web_search;
 
 // === Re-exports ===
 
@@ -33,6 +34,9 @@ pub use registry::{ToolRegistry, ToolRegistryBuilder};
 
 // Re-export search tools
 pub use search::GrepFilesTool;
+
+// Re-export web search tools
+pub use web_search::WebSearchTool;
 
 // Re-export patch tools
 pub use patch::ApplyPatchTool;

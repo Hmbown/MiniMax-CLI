@@ -182,6 +182,8 @@ pub struct App {
     pub pending_tool_uses: Vec<(String, String, Value)>,
     /// User messages queued while a turn is running
     pub queued_messages: VecDeque<QueuedMessage>,
+    /// Draft queued message being edited
+    pub queued_draft: Option<QueuedMessage>,
     /// Start time for current turn
     pub turn_started_at: Option<Instant>,
     /// Last prompt token usage
@@ -194,7 +196,24 @@ pub struct App {
 #[derive(Debug, Clone)]
 pub struct QueuedMessage {
     pub display: String,
-    pub content: String,
+    pub skill_instruction: Option<String>,
+}
+
+impl QueuedMessage {
+    pub fn new(display: String, skill_instruction: Option<String>) -> Self {
+        Self {
+            display,
+            skill_instruction,
+        }
+    }
+
+    pub fn content(&self) -> String {
+        if let Some(skill_instruction) = self.skill_instruction.as_ref() {
+            format!("{skill_instruction}\n\n---\n\nUser request: {}", self.display)
+        } else {
+            self.display.clone()
+        }
+    }
 }
 
 // === Errors ===
@@ -339,6 +358,7 @@ impl App {
             last_reasoning: None,
             pending_tool_uses: Vec::new(),
             queued_messages: VecDeque::new(),
+            queued_draft: None,
             turn_started_at: None,
             last_prompt_tokens: None,
             last_completion_tokens: None,
@@ -523,13 +543,16 @@ impl App {
         Some(input)
     }
 
-    pub fn queue_message(&mut self, display: String, content: String) {
-        self.queued_messages
-            .push_back(QueuedMessage { display, content });
+    pub fn queue_message(&mut self, message: QueuedMessage) {
+        self.queued_messages.push_back(message);
     }
 
     pub fn pop_queued_message(&mut self) -> Option<QueuedMessage> {
         self.queued_messages.pop_front()
+    }
+
+    pub fn remove_queued_message(&mut self, index: usize) -> Option<QueuedMessage> {
+        self.queued_messages.remove(index)
     }
 
     pub fn queued_message_previews(&self, max: usize) -> Vec<String> {

@@ -88,12 +88,10 @@ impl SubAgentType {
                 "edit_file",
                 "exec_shell",
                 "note",
-                "todo_add",
-                "todo_update",
-                "todo_list",
+                "todo_write",
             ],
             Self::Explore => vec!["list_dir", "read_file", "grep_files", "exec_shell"],
-            Self::Plan => vec!["list_dir", "read_file", "note", "update_plan"],
+            Self::Plan => vec!["list_dir", "read_file", "note", "update_plan", "todo_write"],
             Self::Review => vec!["list_dir", "read_file", "grep_files", "note"],
             Self::Custom => vec![], // Must be provided by caller.
         }
@@ -366,7 +364,7 @@ impl ToolSpec for AgentSpawnTool {
     }
 
     fn description(&self) -> &'static str {
-        "Spawn a background sub-agent to handle a focused task. Returns an agent_id immediately."
+        "Spawn a background sub-agent to handle a focused task. Returns an agent_id immediately; follow with agent_result to retrieve the result."
     }
 
     fn input_schema(&self) -> Value {

@@ -261,6 +261,13 @@ impl ToolRegistryBuilder {
         self.with_tool(Arc::new(GrepFilesTool))
     }
 
+    /// Include web search tools.
+    #[must_use]
+    pub fn with_web_tools(self) -> Self {
+        use super::web_search::WebSearchTool;
+        self.with_tool(Arc::new(WebSearchTool))
+    }
+
     /// Include patch tools (`apply_patch`).
     #[must_use]
     pub fn with_patch_tools(self) -> Self {
@@ -282,6 +289,7 @@ impl ToolRegistryBuilder {
             .with_file_tools()
             .with_note_tool()
             .with_search_tools()
+            .with_web_tools()
             .with_patch_tools();
 
         if allow_shell {
@@ -294,8 +302,11 @@ impl ToolRegistryBuilder {
     /// Include the todo tool with a shared `TodoList`.
     #[must_use]
     pub fn with_todo_tool(self, todo_list: super::todo::SharedTodoList) -> Self {
-        use super::todo::TodoWriteTool;
-        self.with_tool(Arc::new(TodoWriteTool::new(todo_list)))
+        use super::todo::{TodoAddTool, TodoListTool, TodoUpdateTool, TodoWriteTool};
+        self.with_tool(Arc::new(TodoWriteTool::new(todo_list.clone())))
+            .with_tool(Arc::new(TodoAddTool::new(todo_list.clone())))
+            .with_tool(Arc::new(TodoUpdateTool::new(todo_list.clone())))
+            .with_tool(Arc::new(TodoListTool::new(todo_list)))
     }
 
     /// Include the plan tool with a shared `PlanState`.

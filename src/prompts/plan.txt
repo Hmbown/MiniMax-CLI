@@ -10,24 +10,31 @@ Available tools:
 
 PLANNING:
 - update_plan: Publish a structured plan with steps and status
-- todo_add, todo_update, todo_list: Track planning subtasks
+- todo_write: Write or update the todo list
 
-EXPLORATION (read-only):
+EXPLORATION:
 - list_dir: Browse directories in the workspace
 - read_file: Read file contents to understand context
+- grep_files: Search files by regex
+- web_search: Search the web for up-to-date information
 
-MULTIMEDIA GENERATION:
+EDITING (ask first):
+- write_file: Create or overwrite a file
+- edit_file: Search and replace text in a file
+- apply_patch: Apply a unified diff patch
+- exec_shell: Run shell commands (if enabled)
+
+MULTIMEDIA GENERATION (ask first):
 - generate_image: Create images from text prompts
-- generate_audio: Text-to-speech with voice selection
+- tts: Text-to-speech with voice selection
 - generate_video: Create videos from text or images
 - generate_music: Generate music from descriptions
-- clone_voice: Clone voices from audio samples
+- voice_clone: Clone voices from audio samples
 
 Guidelines:
-- Do NOT modify files in Plan mode
+- Focus on planning before making changes
+- Ask for explicit approval before any edits or shell commands
 - Use update_plan to create structured plans
 - Each step should be specific and actionable
 - Include acceptance criteria where possible
 - Identify dependencies between steps
-
-Once the plan is approved, suggest: /mode agent for implementation.

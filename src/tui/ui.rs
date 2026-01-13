@@ -142,8 +142,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         workspace: app.workspace.clone(),
         allow_shell: app.allow_shell,
         trust_mode: options.yolo,
-        notes_path: app.workspace.join("notes.txt"),
-        mcp_config_path: app.workspace.join("mcp.json"),
+        notes_path: config.notes_path(),
+        mcp_config_path: config.mcp_config_path(),
         max_steps: 100,
         max_subagents: app.max_subagents,
     };
@@ -578,16 +578,14 @@ async fn run_event_loop(
 
             // Global keybindings
             match key.code {
+                KeyCode::Char('c') | KeyCode::Char('C')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.transcript_selection.is_active() =>
+                {
+                    copy_active_selection(app);
+                }
                 KeyCode::Char('c') | KeyCode::Char('C') if is_copy_shortcut(&key) => {
-                    if app.transcript_selection.is_active() {
-                        if let Some(text) = selection_to_text(app) {
-                            if app.clipboard.write_text(&text).is_ok() {
-                                app.status_message = Some("Selection copied".to_string());
-                            } else {
-                                app.status_message = Some("Copy failed".to_string());
-                            }
-                        }
-                    }
+                    copy_active_selection(app);
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     // Cancel current request or exit
@@ -667,11 +665,16 @@ async fn run_event_loop(
                                 }
                             }
                         } else {
-                            let queued = build_queued_message(app, input);
+                            let queued = if let Some(mut draft) = app.queued_draft.take() {
+                                draft.display = input;
+                                draft
+                            } else {
+                                build_queued_message(app, input)
+                            };
                             if app.is_loading {
-                                app.queue_message(queued.display, queued.content);
+                                app.queue_message(queued);
                                 app.status_message = Some(format!(
-                                    "Queued {} message(s)",
+                                    "Queued {} message(s) - /queue to view/edit",
                                     app.queued_message_count()
                                 ));
                             } else {
@@ -746,16 +749,8 @@ async fn run_event_loop(
 }
 
 fn build_queued_message(app: &mut App, input: String) -> QueuedMessage {
-    let content = if let Some(skill_instruction) = app.active_skill.take() {
-        format!("{skill_instruction}\n\n---\n\nUser request: {input}")
-    } else {
-        input.clone()
-    };
-
-    QueuedMessage {
-        display: input,
-        content,
-    }
+    let skill_instruction = app.active_skill.take();
+    QueuedMessage::new(input, skill_instruction)
 }
 
 async fn dispatch_user_message(
@@ -763,21 +758,25 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
+    let content = message.content();
     app.add_message(HistoryCell::User {
         content: message.display.clone(),
     });
     app.api_messages.push(Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
-            text: message.content.clone(),
+            text: content.clone(),
             cache_control: None,
         }],
     });
 
     engine_handle
         .send(Op::SendMessage {
-            content: message.content,
+            content,
             mode: app.mode,
+            model: app.model.clone(),
+            allow_shell: app.allow_shell,
+            trust_mode: app.trust_mode,
         })
         .await?;
 
@@ -922,14 +921,20 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
 
     if !queued.is_empty() {
         let available = area.width as usize;
-        let prefix = "Queued:";
+        let queued_count = app.queued_message_count();
+        let prefix = format!("Queued ({queued_count}):");
         let prefix_width = prefix.width() + 1;
         let max_len = available.saturating_sub(prefix_width).max(1);
 
-        for message in queued {
-            let preview = truncate_line_to_width(message, max_len);
+        for (idx, message) in queued.iter().enumerate() {
+            let label = if message.starts_with('+') {
+                message.to_string()
+            } else {
+                format!("{}. {message}", idx + 1)
+            };
+            let preview = truncate_line_to_width(&label, max_len);
             lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled(prefix.clone(), Style::default().fg(Color::DarkGray)),
                 Span::raw(" "),
                 Span::styled(preview, Style::default().fg(Color::Gray)),
             ]));
@@ -989,15 +994,19 @@ fn render_composer(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let mut spans = vec![Span::styled(
-        context_indicator(app),
-        Style::default().fg(Color::DarkGray),
-    )];
+    let mut spans = vec![
+        Span::styled(
+            format!("{} mode", app.mode.label()),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw(" | "),
+        Span::styled(context_indicator(app), Style::default().fg(Color::DarkGray)),
+    ];
 
     if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
-            format!("last tokens: {prompt}/{completion}"),
+            format!("last tokens in/out: {prompt}/{completion}"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -1005,10 +1014,12 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let can_scroll = app.last_transcript_total > app.last_transcript_visible;
     if can_scroll {
         spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            "Up/Down scroll",
-            Style::default().fg(Color::DarkGray),
-        ));
+        let hint = if should_scroll_with_arrows(app) {
+            "Up/Down scroll"
+        } else {
+            "Alt+Up/Down scroll"
+        };
+        spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
     }
 
     if can_scroll && !matches!(app.transcript_scroll, TranscriptScroll::ToBottom) {
@@ -1283,7 +1294,7 @@ fn minimax_thinking_label(start: Option<Instant>) -> &'static str {
         "Thinking",
         "Plotting",
         "Drafting",
-        "You're absolutely right... maybe",
+        "You're absolutely right! ... maybe.",
         "Working",
     ];
     const INITIAL_MS: u128 = 2400;
@@ -1370,6 +1381,9 @@ fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::Up(MouseButton::Left) => {
             if app.transcript_selection.dragging {
                 app.transcript_selection.dragging = false;
+                if selection_has_content(app) {
+                    copy_active_selection(app);
+                }
             }
         }
         _ => {}
@@ -1432,6 +1446,26 @@ fn jump_scrollbar(app: &mut App, mouse: MouseEvent) {
     }
 }
 
+fn selection_has_content(app: &App) -> bool {
+    match app.transcript_selection.ordered_endpoints() {
+        Some((start, end)) => start != end,
+        None => false,
+    }
+}
+
+fn copy_active_selection(app: &mut App) {
+    if !app.transcript_selection.is_active() {
+        return;
+    }
+    if let Some(text) = selection_to_text(app) {
+        if app.clipboard.write_text(&text).is_ok() {
+            app.status_message = Some("Selection copied".to_string());
+        } else {
+            app.status_message = Some("Copy failed".to_string());
+        }
+    }
+}
+
 fn selection_to_text(app: &App) -> Option<String> {
     let (start, end) = app.transcript_selection.ordered_endpoints()?;
     let lines = app.transcript_cache.lines();
@@ -1476,14 +1510,7 @@ fn is_copy_shortcut(key: &KeyEvent) -> bool {
 }
 
 fn copy_selection_hint() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "Cmd+C copy selection"
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "Ctrl+Shift+C copy selection"
-    }
+    "Release to copy selection"
 }
 
 fn should_scroll_with_arrows(app: &App) -> bool {

@@ -9,7 +9,13 @@ use crate::tui::app::AppMode;
 #[derive(Debug, Clone)]
 pub enum Op {
     /// Send a message to the AI
-    SendMessage { content: String, mode: AppMode },
+    SendMessage {
+        content: String,
+        mode: AppMode,
+        model: String,
+        allow_shell: bool,
+        trust_mode: bool,
+    },
 
     /// Cancel the current request
     CancelRequest,
@@ -38,10 +44,19 @@ pub enum Op {
 
 impl Op {
     /// Create a send message operation
-    pub fn send(content: impl Into<String>, mode: AppMode) -> Self {
+    pub fn send(
+        content: impl Into<String>,
+        mode: AppMode,
+        model: impl Into<String>,
+        allow_shell: bool,
+        trust_mode: bool,
+    ) -> Self {
         Op::SendMessage {
             content: content.into(),
             mode,
+            model: model.into(),
+            allow_shell,
+            trust_mode,
         }
     }
 

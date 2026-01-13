@@ -265,6 +265,224 @@ impl TodoWriteTool {
     }
 }
 
+/// Tool for adding a single todo item (legacy compatibility).
+pub struct TodoAddTool {
+    todo_list: SharedTodoList,
+}
+
+impl TodoAddTool {
+    pub fn new(todo_list: SharedTodoList) -> Self {
+        Self { todo_list }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for TodoAddTool {
+    fn name(&self) -> &'static str {
+        "todo_add"
+    }
+
+    fn description(&self) -> &'static str {
+        "Add a single todo item (legacy compatibility)."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The task description"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed"],
+                    "description": "Task status (default: pending)"
+                }
+            },
+            "required": ["content"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::WritesFiles]
+    }
+
+    fn approval_level(&self) -> ApprovalLevel {
+        ApprovalLevel::Auto
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let content = input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::invalid_input("Missing 'content'"))?;
+        let status = input
+            .get("status")
+            .and_then(|v| v.as_str())
+            .and_then(TodoStatus::from_str)
+            .unwrap_or(TodoStatus::Pending);
+
+        let mut list = self
+            .todo_list
+            .lock()
+            .map_err(|e| ToolError::execution_failed(format!("Failed to lock todo list: {e}")))?;
+        let item = list.add(content.to_string(), status);
+        let snapshot = list.snapshot();
+
+        let result = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| "{}".to_string());
+        Ok(ToolResult::success(format!(
+            "Added todo #{} ({})\n{}",
+            item.id,
+            item.status.as_str(),
+            result
+        )))
+    }
+}
+
+/// Tool for updating a todo item's status (legacy compatibility).
+pub struct TodoUpdateTool {
+    todo_list: SharedTodoList,
+}
+
+impl TodoUpdateTool {
+    pub fn new(todo_list: SharedTodoList) -> Self {
+        Self { todo_list }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for TodoUpdateTool {
+    fn name(&self) -> &'static str {
+        "todo_update"
+    }
+
+    fn description(&self) -> &'static str {
+        "Update a todo item's status by id (legacy compatibility)."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Todo item id"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed"],
+                    "description": "New status"
+                }
+            },
+            "required": ["id", "status"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::WritesFiles]
+    }
+
+    fn approval_level(&self) -> ApprovalLevel {
+        ApprovalLevel::Auto
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let id = input
+            .get("id")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| ToolError::invalid_input("Missing or invalid 'id'"))?;
+        let status = input
+            .get("status")
+            .and_then(|v| v.as_str())
+            .and_then(TodoStatus::from_str)
+            .ok_or_else(|| ToolError::invalid_input("Missing or invalid 'status'"))?;
+
+        let mut list = self
+            .todo_list
+            .lock()
+            .map_err(|e| ToolError::execution_failed(format!("Failed to lock todo list: {e}")))?;
+        let updated = list.update_status(id, status);
+        let snapshot = list.snapshot();
+        let result = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| "{}".to_string());
+
+        match updated {
+            Some(item) => Ok(ToolResult::success(format!(
+                "Updated todo #{} to {}\n{}",
+                item.id,
+                item.status.as_str(),
+                result
+            ))),
+            None => Ok(ToolResult::error(format!("Todo id {id} not found"))),
+        }
+    }
+}
+
+/// Tool for listing current todos (legacy compatibility).
+pub struct TodoListTool {
+    todo_list: SharedTodoList,
+}
+
+impl TodoListTool {
+    pub fn new(todo_list: SharedTodoList) -> Self {
+        Self { todo_list }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for TodoListTool {
+    fn name(&self) -> &'static str {
+        "todo_list"
+    }
+
+    fn description(&self) -> &'static str {
+        "List current todo items (legacy compatibility)."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly]
+    }
+
+    fn approval_level(&self) -> ApprovalLevel {
+        ApprovalLevel::Auto
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let list = self
+            .todo_list
+            .lock()
+            .map_err(|e| ToolError::execution_failed(format!("Failed to lock todo list: {e}")))?;
+        let snapshot = list.snapshot();
+        let result = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| "{}".to_string());
+        Ok(ToolResult::success(format!(
+            "Todo list ({} items, {}% complete)\n{}",
+            snapshot.items.len(),
+            snapshot.completion_pct,
+            result
+        )))
+    }
+}
+
 #[async_trait]
 impl ToolSpec for TodoWriteTool {
     fn name(&self) -> &'static str {

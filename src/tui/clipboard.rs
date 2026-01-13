@@ -4,7 +4,9 @@
 
 #![allow(dead_code)]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -49,11 +51,36 @@ impl ClipboardHandler {
 
     /// Write text to the clipboard (no-op if unavailable).
     pub fn write_text(&mut self, text: &str) -> Result<()> {
-        let Some(clipboard) = self.clipboard.as_mut() else {
+        if let Some(clipboard) = self.clipboard.as_mut()
+            && clipboard.set_text(text.to_string()).is_ok()
+        {
             return Ok(());
-        };
-        clipboard.set_text(text.to_string())?;
-        Ok(())
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut child = Command::new("pbcopy")
+                .stdin(Stdio::piped())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to run pbcopy: {e}"))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(text.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("Failed to write to pbcopy: {e}"))?;
+            }
+            let status = child
+                .wait()
+                .map_err(|e| anyhow::anyhow!("Failed to wait for pbcopy: {e}"))?;
+            if status.success() {
+                return Ok(());
+            }
+            Err(anyhow::anyhow!("pbcopy failed"))
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err(anyhow::anyhow!("Clipboard unavailable"))
+        }
     }
 }
 

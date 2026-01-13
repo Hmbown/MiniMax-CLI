@@ -145,10 +145,10 @@ pub fn estimate_voice_clone_cost(_params: &Value) -> CostEstimate {
 pub fn estimate_tool_cost(tool_name: &str, params: &Value) -> Option<CostEstimate> {
     match tool_name {
         "generate_image" => Some(estimate_image_cost(params)),
-        "generate_audio" => Some(estimate_audio_cost(params)),
+        "tts" | "tts_async_create" => Some(estimate_audio_cost(params)),
         "generate_video" => Some(estimate_video_cost(params)),
         "generate_music" => Some(estimate_music_cost(params)),
-        "clone_voice" => Some(estimate_voice_clone_cost(params)),
+        "voice_clone" => Some(estimate_voice_clone_cost(params)),
         _ => None,
     }
 }

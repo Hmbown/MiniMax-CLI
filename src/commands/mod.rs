@@ -7,6 +7,7 @@ mod config;
 mod core;
 mod debug;
 mod init;
+mod queue;
 mod session;
 mod skills;
 
@@ -105,6 +106,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Switch or view current model",
         usage: "/model [name]",
+    },
+    CommandInfo {
+        name: "queue",
+        aliases: &["queued"],
+        description: "View or edit queued messages",
+        usage: "/queue [list|edit <n>|drop <n>|clear]",
     },
     CommandInfo {
         name: "subagents",
@@ -248,6 +255,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "exit" | "quit" | "q" => core::exit(),
         "mode" => core::mode(app, arg),
         "model" => core::model(app, arg),
+        "queue" | "queued" => queue::queue(app, arg),
         "subagents" | "agents" => core::subagents(app),
         "minimax" | "dashboard" | "api" => core::minimax_links(),
 

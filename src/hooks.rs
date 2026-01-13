@@ -486,11 +486,28 @@ impl HookExecutor {
             Some(HookCondition::ToolCategory { category }) => {
                 // Map tool names to categories
                 let tool_category = context.tool_name.as_ref().map(|name| match name.as_str() {
-                    "exec_shell" | "shell_output" | "shell_kill" | "shell_list" => "shell",
-                    "write_file" | "edit_file" => "file_write",
-                    "read_file" | "list_dir" => "safe",
-                    "generate_image" | "generate_video" | "generate_audio" | "generate_music"
-                    | "clone_voice" => "paid_multimedia",
+                    "exec_shell" => "shell",
+                    "write_file" | "edit_file" | "apply_patch" => "file_write",
+                    "read_file" | "list_dir" | "grep_files" => "safe",
+                    "analyze_image"
+                    | "generate_image"
+                    | "generate_video"
+                    | "generate_music"
+                    | "tts"
+                    | "tts_async_create"
+                    | "tts_async_query"
+                    | "voice_clone"
+                    | "voice_list"
+                    | "voice_delete"
+                    | "voice_design"
+                    | "upload_file"
+                    | "list_files"
+                    | "retrieve_file"
+                    | "download_file"
+                    | "delete_file"
+                    | "query_video"
+                    | "generate_video_template"
+                    | "query_video_template" => "paid_multimedia",
                     _ => "other",
                 });
                 tool_category.is_some_and(|c| c == category.as_str())

@@ -11,13 +11,15 @@ use std::path::Path;
 // Prompt files loaded at compile time
 pub const BASE_PROMPT: &str = include_str!("prompts/base.txt");
 pub const NORMAL_PROMPT: &str = include_str!("prompts/normal.txt");
+pub const EDIT_PROMPT: &str = include_str!("prompts/edit.txt");
 pub const AGENT_PROMPT: &str = include_str!("prompts/agent.txt");
 pub const PLAN_PROMPT: &str = include_str!("prompts/plan.txt");
 
 /// Get the system prompt for a specific mode
 pub fn system_prompt_for_mode(mode: AppMode) -> SystemPrompt {
     let text = match mode {
-        AppMode::Normal | AppMode::Edit => NORMAL_PROMPT, // Edit mode uses normal prompt for now
+        AppMode::Normal => NORMAL_PROMPT,
+        AppMode::Edit => EDIT_PROMPT,
         AppMode::Agent | AppMode::Rlm => AGENT_PROMPT,    // RLM mode uses agent prompt
         AppMode::Plan => PLAN_PROMPT,
     };
@@ -27,7 +29,8 @@ pub fn system_prompt_for_mode(mode: AppMode) -> SystemPrompt {
 /// Get the system prompt for a specific mode with project context
 pub fn system_prompt_for_mode_with_context(mode: AppMode, workspace: &Path) -> SystemPrompt {
     let base_prompt = match mode {
-        AppMode::Normal | AppMode::Edit => NORMAL_PROMPT,
+        AppMode::Normal => NORMAL_PROMPT,
+        AppMode::Edit => EDIT_PROMPT,
         AppMode::Agent | AppMode::Rlm => AGENT_PROMPT,
         AppMode::Plan => PLAN_PROMPT,
     };
