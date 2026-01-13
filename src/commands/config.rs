@@ -4,6 +4,7 @@ use super::CommandResult;
 use crate::config::clear_api_key;
 use crate::settings::Settings;
 use crate::tui::app::{App, AppMode, OnboardingState};
+use crate::tui::approval::ApprovalMode;
 
 /// Display current configuration
 pub fn show_config(app: &mut App) -> CommandResult {
@@ -140,8 +141,11 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
 /// Enable YOLO mode (agent + shell)
 pub fn yolo(app: &mut App) -> CommandResult {
     app.allow_shell = true;
+    app.trust_mode = true;
+    app.yolo = true;
+    app.approval_mode = ApprovalMode::Auto;
     app.set_mode(AppMode::Agent);
-    CommandResult::message("YOLO mode enabled - agent mode with shell execution!")
+    CommandResult::message("YOLO mode enabled - agent mode + shell + trust + auto-approve!")
 }
 
 /// Enable trust mode (file access outside workspace)
@@ -160,5 +164,43 @@ pub fn logout(app: &mut App) -> CommandResult {
             CommandResult::message("Logged out. Enter a new API key to continue.")
         }
         Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::tui::app::{App, TuiOptions};
+    use crate::tui::approval::ApprovalMode;
+    use std::path::PathBuf;
+
+    fn create_test_app() -> App {
+        let options = TuiOptions {
+            model: "test-model".to_string(),
+            workspace: PathBuf::from("."),
+            allow_shell: false,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: false,
+            yolo: false,
+            resume_session_id: None,
+        };
+        App::new(options, &Config::default())
+    }
+
+    #[test]
+    fn test_yolo_command_sets_all_flags() {
+        let mut app = create_test_app();
+        let _ = yolo(&mut app);
+        assert!(app.allow_shell);
+        assert!(app.trust_mode);
+        assert!(app.yolo);
+        assert_eq!(app.approval_mode, ApprovalMode::Auto);
+        assert_eq!(app.mode, AppMode::Agent);
     }
 }
