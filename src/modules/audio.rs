@@ -459,7 +459,9 @@ fn decode_hex_or_base64(payload: &str) -> Result<Vec<u8>> {
 }
 
 fn looks_like_hex(payload: &str) -> bool {
-    !payload.is_empty() && payload.len() % 2 == 0 && payload.bytes().all(|b| b.is_ascii_hexdigit())
+    !payload.is_empty()
+        && payload.len().is_multiple_of(2)
+        && payload.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn decode_hex(payload: &str) -> Result<Vec<u8>> {
