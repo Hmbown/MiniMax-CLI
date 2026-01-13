@@ -1064,10 +1064,7 @@ fn render_composer(f: &mut Frame, area: Rect, app: &mut App) {
         };
         lines.push(Line::from(vec![
             Span::styled(prompt, Style::default().fg(Color::Green).bold()),
-            Span::styled(
-                placeholder,
-                Style::default().fg(Color::DarkGray).italic(),
-            ),
+            Span::styled(placeholder, Style::default().fg(Color::DarkGray).italic()),
         ]));
     } else {
         for (idx, line) in visible_lines.iter().enumerate() {
@@ -1721,9 +1718,7 @@ fn render_help_popup(f: &mut Frame, area: Rect, scroll: usize) {
     help_lines.push(Line::from(
         "  web_search   - Search the web (DuckDuckGo; MCP optional)",
     ));
-    help_lines.push(Line::from(
-        "  mcp_*        - Tools exposed by MCP servers",
-    ));
+    help_lines.push(Line::from("  mcp_*        - Tools exposed by MCP servers"));
     help_lines.push(Line::from(""));
     help_lines.push(Line::from(vec![Span::styled(
         "Keys:",
@@ -2366,8 +2361,7 @@ fn is_view_image_tool(name: &str) -> bool {
 }
 
 fn is_web_search_tool(name: &str) -> bool {
-    matches!(name, "web_search" | "search_web" | "search")
-        || name.ends_with("_web_search")
+    matches!(name, "web_search" | "search_web" | "search") || name.ends_with("_web_search")
 }
 
 fn web_search_query(input: &serde_json::Value) -> String {

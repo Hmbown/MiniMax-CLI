@@ -42,7 +42,10 @@ pub fn status(app: &mut App) -> CommandResult {
 
     let mut lines = Vec::new();
     lines.push("RLM Session".to_string());
-    lines.push(format!("Active context: {}", app.rlm_session.active_context));
+    lines.push(format!(
+        "Active context: {}",
+        app.rlm_session.active_context
+    ));
     lines.push(format!(
         "Loaded contexts: {}",
         app.rlm_session.contexts.len()
@@ -133,10 +136,7 @@ pub fn save_session(app: &mut App, path: Option<&str>) -> CommandResult {
     };
 
     match fs::write(&save_path, json) {
-        Ok(()) => CommandResult::message(format!(
-            "RLM session saved to {}",
-            save_path.display()
-        )),
+        Ok(()) => CommandResult::message(format!("RLM session saved to {}", save_path.display())),
         Err(err) => CommandResult::error(format!("Failed to save session: {err}")),
     }
 }

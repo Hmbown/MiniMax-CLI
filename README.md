@@ -32,12 +32,12 @@ These aren't wrappers around other services - they're native MiniMax capabilitie
 
 ```bash
 # npm / bun
-npm install -g minimax-cli
-bun install -g minimax-cli
+npm install -g @hmbown/minimax-cli
+bun install -g @hmbown/minimax-cli
 
 # pip / uv
-pip install minimax-cli
-uv pip install minimax-cli
+pip install MiniMax-CLI
+uv pip install MiniMax-CLI
 
 # cargo (builds from source)
 cargo install minimax-cli
