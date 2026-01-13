@@ -145,16 +145,17 @@ impl Config {
     #[allow(dead_code)]
     pub fn output_dir(&self) -> PathBuf {
         self.output_dir
-            .clone()
-            .map_or_else(|| PathBuf::from("./outputs"), PathBuf::from)
+            .as_deref()
+            .map(expand_path)
+            .unwrap_or_else(|| PathBuf::from("./outputs"))
     }
 
     /// Resolve the skills directory path.
     #[must_use]
     pub fn skills_dir(&self) -> PathBuf {
         self.skills_dir
-            .clone()
-            .map(PathBuf::from)
+            .as_deref()
+            .map(expand_path)
             .or_else(default_skills_dir)
             .unwrap_or_else(|| PathBuf::from("./skills"))
     }
@@ -163,8 +164,8 @@ impl Config {
     #[must_use]
     pub fn mcp_config_path(&self) -> PathBuf {
         self.mcp_config_path
-            .clone()
-            .map(PathBuf::from)
+            .as_deref()
+            .map(expand_path)
             .or_else(default_mcp_config_path)
             .unwrap_or_else(|| PathBuf::from("./mcp.json"))
     }
@@ -173,8 +174,8 @@ impl Config {
     #[must_use]
     pub fn notes_path(&self) -> PathBuf {
         self.notes_path
-            .clone()
-            .map(PathBuf::from)
+            .as_deref()
+            .map(expand_path)
             .or_else(default_notes_path)
             .unwrap_or_else(|| PathBuf::from("./notes.txt"))
     }
@@ -183,8 +184,8 @@ impl Config {
     #[must_use]
     pub fn memory_path(&self) -> PathBuf {
         self.memory_path
-            .clone()
-            .map(PathBuf::from)
+            .as_deref()
+            .map(expand_path)
             .or_else(default_memory_path)
             .unwrap_or_else(|| PathBuf::from("./memory.md"))
     }
@@ -240,6 +241,11 @@ fn default_config_path() -> Option<PathBuf> {
         return Some(PathBuf::from(path));
     }
     dirs::home_dir().map(|home| home.join(".minimax").join("config.toml"))
+}
+
+fn expand_path(path: &str) -> PathBuf {
+    let expanded = shellexpand::tilde(path);
+    PathBuf::from(expanded.as_ref())
 }
 
 fn default_skills_dir() -> Option<PathBuf> {
@@ -439,6 +445,7 @@ mod tests {
     use super::*;
     use std::env;
     use std::ffi::OsString;
+    use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -531,6 +538,41 @@ mod tests {
 
         let contents = fs::read_to_string(&path)?;
         assert!(contents.contains("api_key = \"test-key\""));
+        Ok(())
+    }
+
+    #[test]
+    fn test_tilde_expansion_in_paths() -> Result<()> {
+        let _lock = env_lock().lock().unwrap();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root =
+            env::temp_dir().join(format!("minimax-cli-tilde-test-{}-{}", std::process::id(), nanos));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config = Config {
+            skills_dir: Some("~/.minimax/skills".to_string()),
+            ..Default::default()
+        };
+        let expected_skills = temp_root.join(".minimax").join("skills");
+        assert_eq!(config.skills_dir(), expected_skills);
+
+        let absolute_path = temp_root.join("absolute-path");
+        let absolute_str = absolute_path.to_string_lossy().to_string();
+        let config = Config {
+            output_dir: Some(absolute_str.clone()),
+            ..Default::default()
+        };
+        assert_eq!(config.output_dir(), PathBuf::from(absolute_str));
+
+        let config = Config {
+            output_dir: Some("./relative/path".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.output_dir(), PathBuf::from("./relative/path"));
         Ok(())
     }
 }
