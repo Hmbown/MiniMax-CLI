@@ -350,7 +350,7 @@ impl App {
                 ApprovalMode::Suggest
             },
             current_session_id: None,
-            trust_mode: false,
+            trust_mode: yolo,
             project_doc: None,
             plan_state,
             rlm_session: RlmSession::default(),
@@ -649,4 +649,33 @@ pub enum AppAction {
     },
     SendMessage(String),
     ListSubAgents,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn test_options(yolo: bool) -> TuiOptions {
+        TuiOptions {
+            model: "test-model".to_string(),
+            workspace: PathBuf::from("."),
+            allow_shell: yolo,
+            max_subagents: 1,
+            skills_dir: PathBuf::from("."),
+            memory_path: PathBuf::from("memory.md"),
+            notes_path: PathBuf::from("notes.txt"),
+            mcp_config_path: PathBuf::from("mcp.json"),
+            use_memory: false,
+            start_in_agent_mode: yolo,
+            yolo,
+            resume_session_id: None,
+        }
+    }
+
+    #[test]
+    fn test_trust_mode_follows_yolo_on_startup() {
+        let app = App::new(test_options(true), &Config::default());
+        assert!(app.trust_mode);
+    }
 }
