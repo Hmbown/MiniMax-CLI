@@ -30,6 +30,7 @@ mod session;
 mod session_manager;
 mod settings;
 mod skills;
+mod smoke;
 mod tools;
 mod tui;
 mod ui;
@@ -87,7 +88,8 @@ struct Cli {
     continue_session: bool,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Run system diagnostics and check configuration
     Doctor,
@@ -108,6 +110,69 @@ enum Commands {
     },
     /// Create default AGENTS.md in current directory
     Init,
+    /// Smoke test MiniMax media generation (writes real files)
+    SmokeMedia {
+        /// Confirm you want to spend credits and write files
+        #[arg(long)]
+        confirm: bool,
+        /// Output directory for generated files (default: --workspace / current directory)
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        /// Prompt for image generation
+        #[arg(
+            long,
+            default_value = "A friendly robot playing a golden trumpet, colorful illustration"
+        )]
+        image_prompt: String,
+        /// Image model name
+        #[arg(long, default_value = "image-01")]
+        image_model: String,
+        /// Prompt for music generation
+        #[arg(
+            long,
+            default_value = "Cheerful upbeat trumpet solo, jazzy, high quality"
+        )]
+        music_prompt: String,
+        /// Music model name
+        #[arg(long, default_value = "music-1.5")]
+        music_model: String,
+        /// Text for text-to-speech generation
+        #[arg(long, default_value = "Hello from MiniMax CLI smoke test.")]
+        tts_text: String,
+        /// TTS model name
+        #[arg(long, default_value = "speech-02-hd")]
+        tts_model: String,
+        /// Prompt for video generation
+        #[arg(
+            long,
+            default_value = "A cinematic slow pan across a cozy coffee shop interior, warm lighting, rain outside the window"
+        )]
+        video_prompt: String,
+        /// Video model name
+        #[arg(long, default_value = "MiniMax-Hailuo-02")]
+        video_model: String,
+        /// Video duration in seconds
+        #[arg(long, default_value_t = 6)]
+        video_duration: u32,
+        /// Video resolution (MiniMax supports 512P, 768P, 1080P; 720p maps to 768P)
+        #[arg(long, default_value = "768P")]
+        video_resolution: String,
+        /// Submit video generation without waiting/downloading
+        #[arg(long)]
+        video_async: bool,
+        /// Skip image generation
+        #[arg(long)]
+        skip_image: bool,
+        /// Skip music generation
+        #[arg(long)]
+        skip_music: bool,
+        /// Skip TTS generation
+        #[arg(long)]
+        skip_tts: bool,
+        /// Skip video generation
+        #[arg(long)]
+        skip_video: bool,
+    },
 }
 
 #[tokio::main]
@@ -117,7 +182,7 @@ async fn main() -> Result<()> {
     logging::set_verbose(cli.verbose);
 
     // Handle subcommands first
-    if let Some(command) = cli.command {
+    if let Some(command) = cli.command.clone() {
         return match command {
             Commands::Doctor => {
                 run_doctor();
@@ -129,6 +194,67 @@ async fn main() -> Result<()> {
             }
             Commands::Sessions { limit, search } => list_sessions(limit, search),
             Commands::Init => init_project(),
+            Commands::SmokeMedia {
+                confirm,
+                output_dir,
+                image_prompt,
+                image_model,
+                music_prompt,
+                music_model,
+                tts_text,
+                tts_model,
+                video_prompt,
+                video_model,
+                video_duration,
+                video_resolution,
+                video_async,
+                skip_image,
+                skip_music,
+                skip_tts,
+                skip_video,
+            } => {
+                if !confirm {
+                    anyhow::bail!(
+                        "Refusing to run: this command makes paid network calls and writes files. Re-run with --confirm."
+                    );
+                }
+
+                let profile = cli
+                    .profile
+                    .clone()
+                    .or_else(|| std::env::var("MINIMAX_PROFILE").ok());
+                let config = Config::load(cli.config.clone(), profile.as_deref())?;
+                let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+
+                let output_dir = output_dir.unwrap_or_else(|| workspace.clone());
+
+                smoke::run_smoke_media(
+                    &config,
+                    smoke::SmokeMediaOptions {
+                        output_dir,
+                        image_prompt,
+                        image_model,
+                        music_prompt,
+                        music_model,
+                        tts_text,
+                        tts_model,
+                        video_prompt,
+                        video_model,
+                        video_duration,
+                        video_resolution,
+                        video_async,
+                        skip_image,
+                        skip_music,
+                        skip_tts,
+                        skip_video,
+                    },
+                )
+                .await?;
+
+                Ok(())
+            }
         };
     }
 

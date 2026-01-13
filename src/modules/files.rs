@@ -133,31 +133,74 @@ pub async fn retrieve_file(
     file_id: &str,
     purpose: Option<&str>,
 ) -> Result<Option<String>> {
-    let mut body = json!({ "file_id": file_id });
+    let mut query: Vec<(&str, &str)> = vec![("file_id", file_id)];
     if let Some(purpose) = purpose {
-        body["purpose"] = json!(purpose);
+        query.push(("purpose", purpose));
     }
-    let response: Value = client.post_json("/v1/files/retrieve", &body).await?;
+
+    // MiniMax expects GET with query parameters:
+    // https://platform.minimax.io/docs/api-reference/file-management-retrieve
+    let response: Value = client.get_json("/v1/files/retrieve", Some(&query)).await?;
+
+    if let Some(status_code) = response
+        .get("base_resp")
+        .and_then(|base| base.get("status_code"))
+        .and_then(serde_json::Value::as_i64)
+        && status_code != 0
+    {
+        let status_msg = response
+            .get("base_resp")
+            .and_then(|base| base.get("status_msg"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        anyhow::bail!(
+            "MiniMax files/retrieve error: {status_code} {status_msg}. Response: {}",
+            pretty_json(&response)
+        );
+    }
 
     if let Some(url) = response
-        .get("file_url")
+        .get("download_url")
+        .or_else(|| response.get("file_url"))
         .or_else(|| response.get("url"))
         .and_then(|value| value.as_str())
     {
         return Ok(Some(url.to_string()));
     }
-    if let Some(data) = response.get("data")
-        && let Some(url) = data
-            .get("file_url")
-            .or_else(|| data.get("url"))
+
+    if let Some(file) = response.get("file")
+        && let Some(url) = file
+            .get("download_url")
+            .or_else(|| file.get("file_url"))
+            .or_else(|| file.get("url"))
             .and_then(|value| value.as_str())
     {
         return Ok(Some(url.to_string()));
     }
 
+    if let Some(data) = response.get("data") {
+        if let Some(url) = data
+            .get("download_url")
+            .or_else(|| data.get("file_url"))
+            .or_else(|| data.get("url"))
+            .and_then(|value| value.as_str())
+        {
+            return Ok(Some(url.to_string()));
+        }
+        if let Some(file) = data.get("file")
+            && let Some(url) = file
+                .get("download_url")
+                .or_else(|| file.get("file_url"))
+                .or_else(|| file.get("url"))
+                .and_then(|value| value.as_str())
+        {
+            return Ok(Some(url.to_string()));
+        }
+    }
+
     println!(
         "{}",
-        "Failed to retrieve file: no file URL returned from retrieve endpoint.".yellow()
+        "Failed to retrieve file: no download URL returned.".yellow()
     );
     println!("{}", pretty_json(&response));
     Ok(None)
@@ -190,4 +233,60 @@ fn extension_from_content_type(content_type: &str) -> Option<&'static str> {
         return Some("m4a");
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client_for_base_url(base_url: String) -> MiniMaxClient {
+        let config = Config {
+            api_key: Some("test".to_string()),
+            base_url: Some(base_url),
+            ..Config::default()
+        };
+        MiniMaxClient::new(&config).expect("create client")
+    }
+
+    #[tokio::test]
+    async fn retrieve_file_parses_download_url_from_file_object() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/files/retrieve"))
+            .and(query_param("file_id", "123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "base_resp": { "status_code": 0, "status_msg": "success" },
+                "file": { "download_url": "https://example.com/file.mp4" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for_base_url(server.uri());
+        let url = retrieve_file(&client, "123", None)
+            .await
+            .expect("retrieve file");
+        assert_eq!(url.as_deref(), Some("https://example.com/file.mp4"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_file_bails_on_base_resp_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/files/retrieve"))
+            .and(query_param("file_id", "123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "base_resp": { "status_code": 2013, "status_msg": "invalid params" }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for_base_url(server.uri());
+        let result = retrieve_file(&client, "123", None).await;
+        assert!(result.is_err());
+    }
 }

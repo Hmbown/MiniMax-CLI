@@ -29,11 +29,16 @@ pub struct MusicGenerateOptions {
 // === API Calls ===
 
 pub async fn generate(client: &MiniMaxClient, options: MusicGenerateOptions) -> Result<PathBuf> {
+    let prompt_for_fallback = options.prompt.clone();
+    let has_lyrics = options.lyrics.is_some();
     let mut body = json!({
         "model": options.model,
         "prompt": options.prompt,
-        "stream": options.stream,
     });
+
+    if options.stream {
+        body["stream"] = json!(true);
+    }
 
     if let Some(lyrics) = options.lyrics {
         body["lyrics"] = json!(lyrics);
@@ -58,6 +63,14 @@ pub async fn generate(client: &MiniMaxClient, options: MusicGenerateOptions) -> 
         let bytes = response.bytes().await?;
 
         if let Some(value) = parse_json_bytes(&content_type, &bytes) {
+            if !has_lyrics && is_lyrics_too_short(&value) {
+                let mut retry_body = body.clone();
+                retry_body["lyrics"] = json!(fallback_lyrics(&prompt_for_fallback));
+                let retry_response: Value = client
+                    .post_json("/v1/music_generation", &retry_body)
+                    .await?;
+                return handle_music_response(client, &retry_response, &options.output_dir).await;
+            }
             return handle_music_response(client, &value, &options.output_dir).await;
         }
 
@@ -75,8 +88,38 @@ pub async fn generate(client: &MiniMaxClient, options: MusicGenerateOptions) -> 
         Ok(path)
     } else {
         let response: Value = client.post_json("/v1/music_generation", &body).await?;
-        handle_music_response(client, &response, &options.output_dir).await
+        match handle_music_response(client, &response, &options.output_dir).await {
+            Ok(path) => Ok(path),
+            Err(e) => {
+                if !has_lyrics && is_lyrics_too_short(&response) {
+                    let mut retry_body = body.clone();
+                    retry_body["lyrics"] = json!(fallback_lyrics(&prompt_for_fallback));
+                    let retry_response: Value = client
+                        .post_json("/v1/music_generation", &retry_body)
+                        .await?;
+                    handle_music_response(client, &retry_response, &options.output_dir).await
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
+}
+
+fn is_lyrics_too_short(response: &Value) -> bool {
+    let status_msg = response
+        .get("base_resp")
+        .and_then(|base| base.get("status_msg"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let normalized = status_msg.to_ascii_lowercase();
+    normalized.contains("lyrics") && normalized.contains("too short")
+}
+
+fn fallback_lyrics(prompt: &str) -> String {
+    format!(
+        "Instrumental track. No vocals.\n\nPrompt:\n{prompt}\n\nGuidance:\n- No singing or spoken word\n- Use the prompt as style guidance\n\n{prompt}\n{prompt}\n"
+    )
 }
 
 async fn handle_music_response(
@@ -113,9 +156,8 @@ async fn handle_music_response(
     }
 
     if let Some(b64) = extract_music_base64(response) {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64.trim())
-            .context("Failed to decode music payload: invalid base64 data.")?;
+        let bytes = decode_hex_or_base64(b64.trim())
+            .context("Failed to decode music payload: expected hex or base64 data.")?;
         let extension = infer_audio_extension(&bytes)
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| "bin".to_string());
@@ -262,13 +304,46 @@ fn parse_json_bytes(content_type: &str, bytes: &[u8]) -> Option<Value> {
         || bytes
             .iter()
             .copied()
-            .skip_while(u8::is_ascii_whitespace)
-            .next()
+            .find(|b| !b.is_ascii_whitespace())
             .is_some_and(|b| b == b'{' || b == b'[');
     if !looks_json {
         return None;
     }
     serde_json::from_slice(bytes).ok()
+}
+
+fn decode_hex_or_base64(payload: &str) -> Result<Vec<u8>> {
+    if looks_like_hex(payload) {
+        return decode_hex(payload).context("Invalid hex payload.");
+    }
+
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .context("Invalid base64 payload.")
+}
+
+fn looks_like_hex(payload: &str) -> bool {
+    !payload.is_empty() && payload.len() % 2 == 0 && payload.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn decode_hex(payload: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(payload.len() / 2);
+    let mut iter = payload.bytes();
+    while let (Some(high), Some(low)) = (iter.next(), iter.next()) {
+        let high = hex_value(high).context("Invalid hex digit.")?;
+        let low = hex_value(low).context("Invalid hex digit.")?;
+        out.push((high << 4) | low);
+    }
+    Ok(out)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn infer_audio_extension(bytes: &[u8]) -> Option<&'static str> {
@@ -359,6 +434,12 @@ mod tests {
     #[test]
     fn infer_audio_extension_detects_mp3() {
         assert_eq!(infer_audio_extension(b"ID3\x04\x00\x00"), Some("mp3"));
+    }
+
+    #[test]
+    fn decode_hex_or_base64_decodes_hex_payload() {
+        let bytes = decode_hex_or_base64("494433040000").expect("decode hex");
+        assert!(bytes.starts_with(b"ID3"));
     }
 
     #[tokio::test]

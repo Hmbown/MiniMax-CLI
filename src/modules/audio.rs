@@ -15,6 +15,8 @@ use crate::utils::{
 
 // === Types ===
 
+const DEFAULT_TTS_VOICE_ID: &str = "English_expressive_narrator";
+
 /// Options for synchronous text-to-audio generation.
 pub struct T2aOptions {
     pub model: String,
@@ -108,6 +110,10 @@ pub async fn t2a(client: &MiniMaxClient, options: T2aOptions) -> Result<PathBuf>
     merge_json_field(&mut body, "timber_weights", options.timber_weights_json)?;
     merge_json_field(&mut body, "language_boost", options.language_boost_json)?;
     merge_json_field(&mut body, "voice_modify", options.voice_modify_json)?;
+
+    if body.get("voice_setting").is_none() {
+        body["voice_setting"] = json!({ "voice_id": DEFAULT_TTS_VOICE_ID });
+    }
 
     if let Some(subtitle_enable) = options.subtitle_enable {
         body["subtitle_enable"] = json!(subtitle_enable);
@@ -258,10 +264,8 @@ pub async fn voice_clone(client: &MiniMaxClient, options: VoiceCloneOptions) -> 
 }
 
 pub async fn voice_list(client: &MiniMaxClient, options: VoiceListOptions) -> Result<Value> {
-    let mut body = json!({});
-    if let Some(voice_type) = options.voice_type {
-        body["voice_type"] = json!(voice_type);
-    }
+    let voice_type = options.voice_type.unwrap_or_else(|| "all".to_string());
+    let body = json!({ "voice_type": voice_type });
     let response: Value = client.post_json("/v1/get_voice", &body).await?;
     Ok(response)
 }
@@ -322,9 +326,8 @@ async fn handle_audio_response(
     }
 
     if let Some(b64) = extract_audio_base64(response) {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64.trim())
-            .context("Failed to decode audio payload: invalid base64 data.")?;
+        let bytes = decode_hex_or_base64(b64.trim())
+            .context("Failed to decode audio payload: expected hex or base64 data.")?;
         let extension = infer_audio_extension(&bytes)
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| "bin".to_string());
@@ -437,13 +440,46 @@ fn parse_json_bytes(content_type: &str, bytes: &[u8]) -> Option<Value> {
         || bytes
             .iter()
             .copied()
-            .skip_while(u8::is_ascii_whitespace)
-            .next()
+            .find(|b| !b.is_ascii_whitespace())
             .is_some_and(|b| b == b'{' || b == b'[');
     if !looks_json {
         return None;
     }
     serde_json::from_slice(bytes).ok()
+}
+
+fn decode_hex_or_base64(payload: &str) -> Result<Vec<u8>> {
+    if looks_like_hex(payload) {
+        return decode_hex(payload).context("Invalid hex payload.");
+    }
+
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .context("Invalid base64 payload.")
+}
+
+fn looks_like_hex(payload: &str) -> bool {
+    !payload.is_empty() && payload.len() % 2 == 0 && payload.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn decode_hex(payload: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(payload.len() / 2);
+    let mut iter = payload.bytes();
+    while let (Some(high), Some(low)) = (iter.next(), iter.next()) {
+        let high = hex_value(high).context("Invalid hex digit.")?;
+        let low = hex_value(low).context("Invalid hex digit.")?;
+        out.push((high << 4) | low);
+    }
+    Ok(out)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn infer_audio_extension(bytes: &[u8]) -> Option<&'static str> {
@@ -569,5 +605,11 @@ mod tests {
         assert!(path.starts_with(dir.path()));
         assert!(path.exists());
         assert_eq!(std::fs::read(&path).expect("read audio"), wav_bytes);
+    }
+
+    #[test]
+    fn decode_hex_or_base64_decodes_hex_payload() {
+        let bytes = decode_hex_or_base64("494433040000").expect("decode hex");
+        assert!(bytes.starts_with(b"ID3"));
     }
 }

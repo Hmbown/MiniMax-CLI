@@ -984,95 +984,9 @@ fn pad_lines_to_bottom(lines: &mut Vec<Line<'static>>, height: usize) {
     }
 
     let mut padded = Vec::with_capacity(height);
-    padded.extend(std::iter::repeat(Line::from("")).take(padding));
-    padded.extend(lines.drain(..));
+    padded.extend(std::iter::repeat_n(Line::from(""), padding));
+    padded.append(lines);
     *lines = padded;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pad_lines_to_bottom_noop_when_already_filled() {
-        let mut lines = vec![Line::from("one"), Line::from("two")];
-        pad_lines_to_bottom(&mut lines, 2);
-        assert_eq!(lines, vec![Line::from("one"), Line::from("two")]);
-    }
-
-    #[test]
-    fn pad_lines_to_bottom_prepends_empty_lines() {
-        let mut lines = vec![Line::from("one"), Line::from("two")];
-        pad_lines_to_bottom(&mut lines, 5);
-
-        assert_eq!(lines.len(), 5);
-        assert_eq!(lines[0], Line::from(""));
-        assert_eq!(lines[1], Line::from(""));
-        assert_eq!(lines[2], Line::from(""));
-        assert_eq!(lines[3], Line::from("one"));
-        assert_eq!(lines[4], Line::from("two"));
-    }
-
-    #[test]
-    fn pad_lines_to_bottom_noop_when_height_is_zero() {
-        let mut lines = vec![Line::from("one")];
-        pad_lines_to_bottom(&mut lines, 0);
-        assert_eq!(lines, vec![Line::from("one")]);
-    }
-
-    #[test]
-    fn selection_point_from_position_ignores_top_padding() {
-        let area = Rect {
-            x: 10,
-            y: 20,
-            width: 30,
-            height: 5,
-        };
-
-        // Content is bottom-aligned: 2 transcript lines in a 5-row viewport.
-        let padding_top = 3;
-        let transcript_top = 0;
-        let transcript_total = 2;
-
-        // Click in padding area -> no selection
-        assert!(
-            selection_point_from_position(
-                area,
-                area.x + 1,
-                area.y,
-                transcript_top,
-                transcript_total,
-                padding_top,
-            )
-            .is_none()
-        );
-
-        // First transcript line is at row `padding_top`
-        let p0 = selection_point_from_position(
-            area,
-            area.x + 2,
-            area.y + u16::try_from(padding_top).unwrap(),
-            transcript_top,
-            transcript_total,
-            padding_top,
-        )
-        .expect("point");
-        assert_eq!(p0.line_index, 0);
-        assert_eq!(p0.column, 2);
-
-        // Second transcript line is one row below
-        let p1 = selection_point_from_position(
-            area,
-            area.x,
-            area.y + u16::try_from(padding_top + 1).unwrap(),
-            transcript_top,
-            transcript_total,
-            padding_top,
-        )
-        .expect("point");
-        assert_eq!(p1.line_index, 1);
-        assert_eq!(p1.column, 0);
-    }
 }
 
 fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[String]) {
@@ -2611,4 +2525,90 @@ fn exec_is_background(input: &serde_json::Value) -> bool {
         .get("background")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pad_lines_to_bottom_noop_when_already_filled() {
+        let mut lines = vec![Line::from("one"), Line::from("two")];
+        pad_lines_to_bottom(&mut lines, 2);
+        assert_eq!(lines, vec![Line::from("one"), Line::from("two")]);
+    }
+
+    #[test]
+    fn pad_lines_to_bottom_prepends_empty_lines() {
+        let mut lines = vec![Line::from("one"), Line::from("two")];
+        pad_lines_to_bottom(&mut lines, 5);
+
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], Line::from(""));
+        assert_eq!(lines[1], Line::from(""));
+        assert_eq!(lines[2], Line::from(""));
+        assert_eq!(lines[3], Line::from("one"));
+        assert_eq!(lines[4], Line::from("two"));
+    }
+
+    #[test]
+    fn pad_lines_to_bottom_noop_when_height_is_zero() {
+        let mut lines = vec![Line::from("one")];
+        pad_lines_to_bottom(&mut lines, 0);
+        assert_eq!(lines, vec![Line::from("one")]);
+    }
+
+    #[test]
+    fn selection_point_from_position_ignores_top_padding() {
+        let area = Rect {
+            x: 10,
+            y: 20,
+            width: 30,
+            height: 5,
+        };
+
+        // Content is bottom-aligned: 2 transcript lines in a 5-row viewport.
+        let padding_top = 3;
+        let transcript_top = 0;
+        let transcript_total = 2;
+
+        // Click in padding area -> no selection
+        assert!(
+            selection_point_from_position(
+                area,
+                area.x + 1,
+                area.y,
+                transcript_top,
+                transcript_total,
+                padding_top,
+            )
+            .is_none()
+        );
+
+        // First transcript line is at row `padding_top`
+        let p0 = selection_point_from_position(
+            area,
+            area.x + 2,
+            area.y + u16::try_from(padding_top).unwrap(),
+            transcript_top,
+            transcript_total,
+            padding_top,
+        )
+        .expect("point");
+        assert_eq!(p0.line_index, 0);
+        assert_eq!(p0.column, 2);
+
+        // Second transcript line is one row below
+        let p1 = selection_point_from_position(
+            area,
+            area.x,
+            area.y + u16::try_from(padding_top + 1).unwrap(),
+            transcript_top,
+            transcript_total,
+            padding_top,
+        )
+        .expect("point");
+        assert_eq!(p1.line_index, 1);
+        assert_eq!(p1.column, 0);
+    }
 }

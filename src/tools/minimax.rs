@@ -478,6 +478,46 @@ fn normalize_response_format(value: &str) -> String {
     }
 }
 
+fn normalize_video_resolution(value: Option<&str>) -> Result<Option<String>, ToolError> {
+    let Some(raw) = value else {
+        return Ok(Some("768P".to_string()));
+    };
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Some("768P".to_string()));
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    let normalized = match upper.as_str() {
+        "512P" | "512" => "512P",
+        "768P" | "768" => "768P",
+        "1080P" | "1080" => "1080P",
+        "720P" | "720" => "768P", // common expectation; MiniMax video uses 768P instead
+        _ => {
+            return Err(ToolError::invalid_input(
+                "Invalid resolution. Supported: 512P, 768P, 1080P (720p maps to 768P).",
+            ));
+        }
+    };
+
+    Ok(Some(normalized.to_string()))
+}
+
+fn normalize_video_duration(value: Option<u32>) -> Result<Option<u32>, ToolError> {
+    let Some(value) = value else {
+        return Ok(Some(6));
+    };
+
+    match value {
+        6 | 10 => Ok(Some(value)),
+        5 => Ok(Some(6)), // legacy default -> supported default
+        _ => Err(ToolError::invalid_input(
+            "Invalid duration. Supported: 6 or 10 seconds.",
+        )),
+    }
+}
+
 #[async_trait]
 impl ToolSpec for GenerateImageTool {
     fn name(&self) -> &'static str {
@@ -649,13 +689,13 @@ impl ToolSpec for GenerateVideoTool {
                 },
                 "duration": {
                     "type": "integer",
-                    "description": "Video duration in seconds (default: 5)",
-                    "default": 5
+                    "description": "Video duration in seconds (supported: 6 or 10)",
+                    "default": 6
                 },
                 "resolution": {
                     "type": "string",
-                    "description": "Video resolution (e.g., 720p, 1080p)",
-                    "default": "720p"
+                    "description": "Video resolution (supported: 512P, 768P, 1080P; 720p maps to 768P)",
+                    "default": "768P"
                 },
                 "first_frame": {
                     "type": "string",
@@ -709,7 +749,8 @@ impl ToolSpec for GenerateVideoTool {
             .get("duration")
             .and_then(serde_json::Value::as_u64)
             .and_then(|v| u32::try_from(v).ok());
-        let resolution = optional_str(&input, "resolution").map(std::string::ToString::to_string);
+        let duration = normalize_video_duration(duration)?;
+        let resolution = normalize_video_resolution(optional_str(&input, "resolution"))?;
         let first_frame = optional_str(&input, "first_frame").map(std::string::ToString::to_string);
         let last_frame = optional_str(&input, "last_frame").map(std::string::ToString::to_string);
         let subject_reference = optional_string_vec(&input, "subject_reference");
