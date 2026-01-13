@@ -252,13 +252,25 @@ impl ToolContext {
             .workspace
             .canonicalize()
             .unwrap_or_else(|_| self.workspace.clone());
-        let workspace_normalized = normalize_path(&workspace_canonical);
-        let candidate_normalized = normalize_path(&candidate);
 
-        if !candidate_normalized.starts_with(&workspace_normalized) {
-            return Err(ToolError::PathEscape {
-                path: candidate_normalized,
-            });
+        // For the initial check, also try to canonicalize the candidate if possible
+        // This handles symlinks like /var -> /private/var on macOS
+        let candidate_canonical = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_path(&candidate));
+        let workspace_normalized = normalize_path(&workspace_canonical);
+
+        // Check if the candidate is under the workspace (comparing canonical paths)
+        if !candidate_canonical.starts_with(&workspace_normalized) {
+            // Also try with non-canonical workspace for cases where workspace itself
+            // hasn't been canonicalized yet
+            let workspace_plain = normalize_path(&self.workspace);
+            let candidate_normalized = normalize_path(&candidate);
+            if !candidate_normalized.starts_with(&workspace_plain) {
+                return Err(ToolError::PathEscape {
+                    path: candidate_canonical,
+                });
+            }
         }
 
         // For existing paths, use canonicalize directly
