@@ -1,6 +1,6 @@
 [package]
 name = "minimax-cli"
-version = "0.1.0-alpha"
+version = "0.1.0"
 edition = "2024"
 description = "Unofficial MiniMax M2.1 CLI - Just run 'minimax' to start chatting"
 license = "MIT"

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha] - 2026-01-12
+## [0.1.0] - 2026-01-12
 
 ### Added
 - Initial alpha release of MiniMax CLI
@@ -21,5 +21,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.0-alpha...HEAD
-[0.1.0-alpha]: https://github.com/Hmbown/MiniMax-CLI/releases/tag/v0.1.0-alpha
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Hmbown/MiniMax-CLI/releases/tag/v0.1.0
