@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use crate::models::{ContentBlock, Message};
 use serde_json::Value;
 
 // === Filesystem Helpers ===
@@ -63,4 +64,21 @@ pub fn truncate_with_ellipsis(s: &str, max_len: usize, ellipsis: &str) -> String
         let truncate_at = max_len.saturating_sub(ellipsis.len());
         format!("{}{}", &s[..truncate_at], ellipsis)
     }
+}
+
+/// Estimate the total character count across message content blocks.
+#[must_use]
+pub fn estimate_message_chars(messages: &[Message]) -> usize {
+    let mut total = 0;
+    for msg in messages {
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text, .. } => total += text.len(),
+                ContentBlock::Thinking { thinking } => total += thinking.len(),
+                ContentBlock::ToolUse { input, .. } => total += input.to_string().len(),
+                ContentBlock::ToolResult { content, .. } => total += content.len(),
+            }
+        }
+    }
+    total
 }

@@ -120,7 +120,7 @@ pub struct Usage {
 pub fn context_window_for_model(model: &str) -> Option<u32> {
     let lower = model.to_lowercase();
     if lower.contains("minimax-m2.1") || lower.contains("m2.1") {
-        return Some(204_000);
+        return Some(1_000_000);
     }
     if lower.contains("claude") {
         return Some(200_000);

@@ -1,8 +1,9 @@
-//! Config commands: config, set, settings, yolo, trust
+//! Config commands: config, set, settings, yolo, trust, logout
 
 use super::CommandResult;
+use crate::config::clear_api_key;
 use crate::settings::Settings;
-use crate::tui::app::{App, AppMode};
+use crate::tui::app::{App, AppMode, OnboardingState};
 
 /// Display current configuration
 pub fn show_config(app: &mut App) -> CommandResult {
@@ -147,4 +148,17 @@ pub fn yolo(app: &mut App) -> CommandResult {
 pub fn trust(app: &mut App) -> CommandResult {
     app.trust_mode = true;
     CommandResult::message("Trust mode enabled - can access files outside workspace")
+}
+
+/// Logout - clear API key and return to onboarding
+pub fn logout(app: &mut App) -> CommandResult {
+    match clear_api_key() {
+        Ok(()) => {
+            app.onboarding = OnboardingState::Welcome;
+            app.api_key_input.clear();
+            app.api_key_cursor = 0;
+            CommandResult::message("Logged out. Enter a new API key to continue.")
+        }
+        Err(e) => CommandResult::error(format!("Failed to clear API key: {e}")),
+    }
 }

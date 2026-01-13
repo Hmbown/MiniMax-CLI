@@ -175,6 +175,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Enable trust mode (access files outside workspace)",
         usage: "/trust",
     },
+    CommandInfo {
+        name: "logout",
+        aliases: &[],
+        description: "Clear API key and return to setup",
+        usage: "/logout",
+    },
     // Debug commands
     CommandInfo {
         name: "tokens",
@@ -271,6 +277,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "set" => config::set_config(app, arg),
         "yolo" => config::yolo(app),
         "trust" => config::trust(app),
+        "logout" => config::logout(app),
 
         // Debug commands
         "tokens" => debug::tokens(app),

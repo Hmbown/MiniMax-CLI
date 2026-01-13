@@ -409,6 +409,31 @@ pub fn has_api_key(config: &Config) -> bool {
     config.api_key.is_some()
 }
 
+/// Clear the API key from the config file
+pub fn clear_api_key() -> Result<()> {
+    let config_path = default_config_path()
+        .context("Failed to resolve config path: home directory not found.")?;
+
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let existing = fs::read_to_string(&config_path)?;
+    let mut result = String::new();
+
+    for line in existing.lines() {
+        if !line.trim_start().starts_with("api_key") {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    fs::write(&config_path, result)
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,12 +31,14 @@ use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::HookEvent;
-use crate::models::{ContentBlock, Message, context_window_for_model};
+use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
+use crate::prompts;
 use crate::session_manager::{SessionManager, create_saved_session, update_session};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
 use crate::tui::selection::TranscriptSelectionPoint;
+use crate::utils::estimate_message_chars;
 
 use super::app::{App, AppAction, AppMode, OnboardingState, QueuedMessage, TuiOptions};
 use super::approval::{ApprovalRequest, render_approval_overlay};
@@ -110,8 +112,12 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
             Ok(Some(saved)) => {
                 app.api_messages.clone_from(&saved.messages);
                 app.model.clone_from(&saved.metadata.model);
+                app.workspace.clone_from(&saved.metadata.workspace);
                 app.current_session_id = Some(saved.metadata.id.clone());
                 app.total_tokens = u32::try_from(saved.metadata.total_tokens).unwrap_or(u32::MAX);
+                if let Some(prompt) = saved.system_prompt {
+                    app.system_prompt = Some(SystemPrompt::Text(prompt));
+                }
                 // Convert saved messages to HistoryCell format for display
                 app.history.clear();
                 app.history.push(HistoryCell::System {
@@ -759,6 +765,10 @@ async fn dispatch_user_message(
     message: QueuedMessage,
 ) -> Result<()> {
     let content = message.content();
+    app.system_prompt = Some(prompts::system_prompt_for_mode_with_context(
+        app.mode,
+        &app.workspace,
+    ));
     app.add_message(HistoryCell::User {
         content: message.display.clone(),
     });
@@ -1006,7 +1016,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
-            format!("last tokens in/out: {prompt}/{completion}"),
+            format!("last prompt/response tokens: {prompt}/{completion}"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -1250,10 +1260,7 @@ fn render_scrollbar(f: &mut Frame, area: Rect, top: usize, visible: usize, total
 }
 
 fn context_indicator(app: &App) -> String {
-    let used = app
-        .last_prompt_tokens
-        .map(i64::from)
-        .or_else(|| (app.total_tokens > 0).then_some(i64::from(app.total_tokens)));
+    let used = estimated_context_tokens(app);
 
     if let Some(max) = context_window_for_model(&app.model) {
         if let Some(used) = used {
@@ -1269,6 +1276,23 @@ fn context_indicator(app: &App) -> String {
     } else {
         "100% context left".to_string()
     }
+}
+
+fn estimated_context_tokens(app: &App) -> Option<i64> {
+    let mut total_chars = estimate_message_chars(&app.api_messages);
+
+    match &app.system_prompt {
+        Some(SystemPrompt::Text(text)) => total_chars = total_chars.saturating_add(text.len()),
+        Some(SystemPrompt::Blocks(blocks)) => {
+            for block in blocks {
+                total_chars = total_chars.saturating_add(block.text.len());
+            }
+        }
+        None => {}
+    }
+
+    let estimated_tokens = total_chars / 4;
+    i64::try_from(estimated_tokens).ok()
 }
 
 fn format_elapsed(start: Instant) -> String {

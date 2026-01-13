@@ -1,6 +1,6 @@
 # MiniMax CLI
 
-> **Alpha** — Unofficial community project. Not affiliated with MiniMax Inc.
+![MiniMax CLI](assets/hero.png)
 
 ![CI](https://github.com/Hmbown/MiniMax-CLI/actions/workflows/ci.yml/badge.svg)
 

@@ -1,10 +1,11 @@
 //! Debug commands: tokens, cost, system, context, undo, retry
 
 use super::CommandResult;
-use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
+use crate::models::{SystemPrompt, context_window_for_model};
 use crate::pricing;
 use crate::tui::app::{App, AppAction};
 use crate::tui::history::HistoryCell;
+use crate::utils::estimate_message_chars;
 
 /// Show token usage for session
 pub fn tokens(app: &mut App) -> CommandResult {
@@ -180,19 +181,4 @@ pub fn retry(app: &mut App) -> CommandResult {
         }
         None => CommandResult::error("No previous request to retry"),
     }
-}
-
-fn estimate_message_chars(messages: &[Message]) -> usize {
-    let mut total = 0;
-    for msg in messages {
-        for block in &msg.content {
-            match block {
-                ContentBlock::Text { text, .. } => total += text.len(),
-                ContentBlock::Thinking { thinking } => total += thinking.len(),
-                ContentBlock::ToolUse { input, .. } => total += input.to_string().len(),
-                ContentBlock::ToolResult { content, .. } => total += content.len(),
-            }
-        }
-    }
-    total
 }
