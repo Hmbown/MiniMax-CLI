@@ -6,7 +6,7 @@
 //! - `ToolResult`: Unified result type for tool execution
 //! - `ToolCapability`: Capabilities and requirements of tools
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -252,6 +252,14 @@ impl ToolContext {
             .workspace
             .canonicalize()
             .unwrap_or_else(|_| self.workspace.clone());
+        let workspace_normalized = normalize_path(&workspace_canonical);
+        let candidate_normalized = normalize_path(&candidate);
+
+        if !candidate_normalized.starts_with(&workspace_normalized) {
+            return Err(ToolError::PathEscape {
+                path: candidate_normalized,
+            });
+        }
 
         // For existing paths, use canonicalize directly
         if candidate.exists() {
@@ -303,9 +311,12 @@ impl ToolContext {
         for part in suffix_parts.into_iter().rev() {
             canonical.push(part);
         }
+        let canonical = normalize_path(&canonical);
 
         // Validate it's under workspace
-        if !canonical.starts_with(&workspace_canonical) {
+        if !canonical.starts_with(&workspace_canonical)
+            && !canonical.starts_with(&workspace_normalized)
+        {
             return Err(ToolError::PathEscape { path: canonical });
         }
 
@@ -323,6 +334,50 @@ impl ToolContext {
         self.sandbox_policy = policy;
         self
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut prefix: Option<std::ffi::OsString> = None;
+    let mut is_root = false;
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix_component) => {
+                prefix = Some(prefix_component.as_os_str().to_owned());
+            }
+            Component::RootDir => {
+                is_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let parent = Component::ParentDir.as_os_str();
+                if let Some(last) = stack.pop() {
+                    if last == parent {
+                        stack.push(last);
+                        stack.push(parent.to_owned());
+                    }
+                } else if !is_root {
+                    stack.push(parent.to_owned());
+                }
+            }
+            Component::Normal(part) => {
+                stack.push(part.to_owned());
+            }
+        }
+    }
+
+    let mut normalized = PathBuf::new();
+    if let Some(prefix) = prefix {
+        normalized.push(prefix);
+    }
+    if is_root {
+        normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+    }
+    for part in stack {
+        normalized.push(part);
+    }
+    normalized
 }
 
 /// The core trait that all tools must implement.
@@ -482,6 +537,24 @@ mod tests {
         // Try to escape workspace
         let result = ctx.resolve_path("/etc/passwd");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_context_resolve_path_parent_traversal() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let result = ctx.resolve_path("../escape.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_context_resolve_path_normalizes_parent() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let result = ctx.resolve_path("new/../safe.txt");
+        assert!(result.is_ok());
     }
 
     #[test]

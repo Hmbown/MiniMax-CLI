@@ -175,7 +175,10 @@ impl MiniMaxClient {
         let response = send_with_retry(&self.retry, || client.get(url)).await?;
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("(failed to read body: {e})"));
             anyhow::bail!("Failed to fetch bytes: HTTP {status}: {text}");
         }
         Ok(response.bytes().await?)
@@ -222,7 +225,10 @@ impl MiniMaxClient {
     ) -> Result<T> {
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("(failed to read body: {e})"));
             anyhow::bail!("Failed to call MiniMax API: HTTP {status}: {text}");
         }
         Ok(response.json::<T>().await?)
@@ -338,7 +344,10 @@ where
                 let retryable = status.as_u16() == 429 || status.is_server_error();
 
                 if !policy.enabled || !retryable || attempt >= policy.max_retries {
-                    let text = response.text().await.unwrap_or_default();
+                    let text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|e| format!("(failed to read body: {e})"));
                     anyhow::bail!("Failed to send API request: HTTP {status}: {text}");
                 }
                 logging::warn(format!(

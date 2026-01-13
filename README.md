@@ -31,18 +31,19 @@ These aren't wrappers around other services - they're native MiniMax capabilitie
 ## Install
 
 ```bash
+# npm / bun
+npm install -g minimax-cli
+bun install -g minimax-cli
+
+# pip / uv
+pip install minimax-cli
+uv pip install minimax-cli
+
+# cargo (builds from source)
 cargo install minimax-cli
 ```
 
-Or build from source:
-
-```bash
-git clone https://github.com/Hmbown/MiniMax-CLI
-cd MiniMax-CLI
-cargo install --path .
-```
-
-Prebuilt binaries: [Releases](https://github.com/Hmbown/MiniMax-CLI/releases)
+Or download prebuilt binaries from [Releases](https://github.com/Hmbown/MiniMax-CLI/releases).
 
 ## Usage
 

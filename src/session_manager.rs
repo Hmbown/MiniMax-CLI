@@ -149,8 +149,13 @@ impl SessionManager {
 
     /// Load only the metadata from a session file (faster than loading full session)
     fn load_session_metadata(path: &Path) -> std::io::Result<SessionMetadata> {
-        let content = fs::read_to_string(path)?;
-        let session: SavedSession = serde_json::from_str(&content)
+        #[derive(Deserialize)]
+        struct SavedSessionMetadata {
+            metadata: SessionMetadata,
+        }
+
+        let file = fs::File::open(path)?;
+        let session: SavedSessionMetadata = serde_json::from_reader(file)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         Ok(session.metadata)
     }

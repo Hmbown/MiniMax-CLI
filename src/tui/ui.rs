@@ -1574,11 +1574,8 @@ fn copy_selection_hint() -> &'static str {
     "Release to copy selection"
 }
 
-fn should_scroll_with_arrows(app: &App) -> bool {
-    app.input.is_empty()
-        && app.history_index.is_none()
-        && !app.is_loading
-        && app.last_transcript_total > app.last_transcript_visible
+fn should_scroll_with_arrows(_app: &App) -> bool {
+    false
 }
 
 fn line_to_plain(line: &Line<'static>) -> String {

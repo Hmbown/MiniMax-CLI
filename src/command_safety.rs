@@ -246,6 +246,30 @@ pub fn analyze_command(command: &str) -> SafetyAnalysis {
     let command_lower = command.to_lowercase();
     let command_trimmed = command.trim();
 
+    if command.contains('\n') || command.contains('\r') {
+        return SafetyAnalysis::dangerous(
+            command,
+            vec!["Command contains multiple lines".to_string()],
+            vec!["Run one command at a time".to_string()],
+        );
+    }
+
+    if command.contains("&&") || command.contains("||") || command.contains(';') {
+        return SafetyAnalysis::dangerous(
+            command,
+            vec!["Command chaining detected".to_string()],
+            vec!["Run commands separately to reduce risk".to_string()],
+        );
+    }
+
+    if command.contains("`") || command.contains("$(") {
+        return SafetyAnalysis::dangerous(
+            command,
+            vec!["Command substitution detected".to_string()],
+            vec!["Avoid shell substitutions in exec_shell".to_string()],
+        );
+    }
+
     // Check for dangerous patterns first
     for (pattern, reason) in DANGEROUS_PATTERNS {
         if command_lower.contains(&pattern.to_lowercase()) {
