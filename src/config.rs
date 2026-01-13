@@ -95,7 +95,7 @@ impl Config {
                     .with_context(|| format!("Failed to read config file: {}", path.display()))?;
                 let parsed: ConfigFile = toml::from_str(&contents)
                     .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
-                apply_profile(parsed, profile)
+                apply_profile(parsed, profile)?
             } else {
                 Config::default()
             }
@@ -313,14 +313,33 @@ fn normalize_base_url(base: &str) -> String {
     trimmed.to_string()
 }
 
-fn apply_profile(config: ConfigFile, profile: Option<&str>) -> Config {
-    if let Some(profile) = profile
-        && let Some(profiles) = config.profiles
-        && let Some(override_cfg) = profiles.get(profile)
-    {
-        return merge_config(config.base, override_cfg.clone());
+fn apply_profile(config: ConfigFile, profile: Option<&str>) -> Result<Config> {
+    if let Some(profile_name) = profile {
+        let profiles = config.profiles.as_ref();
+        match profiles.and_then(|profiles| profiles.get(profile_name)) {
+            Some(override_cfg) => Ok(merge_config(config.base, override_cfg.clone())),
+            None => {
+                let available = profiles
+                    .map(|profiles| {
+                        let mut keys = profiles.keys().cloned().collect::<Vec<_>>();
+                        keys.sort();
+                        if keys.is_empty() {
+                            "none".to_string()
+                        } else {
+                            keys.join(", ")
+                        }
+                    })
+                    .unwrap_or_else(|| "none".to_string());
+                anyhow::bail!(
+                    "Profile '{}' not found. Available profiles: {}",
+                    profile_name,
+                    available
+                )
+            }
+        }
+    } else {
+        Ok(config.base)
     }
-    config.base
 }
 
 fn merge_config(base: Config, override_cfg: Config) -> Config {
@@ -443,6 +462,7 @@ pub fn clear_api_key() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -574,5 +594,32 @@ mod tests {
         };
         assert_eq!(config.output_dir(), PathBuf::from("./relative/path"));
         Ok(())
+    }
+
+    #[test]
+    fn test_nonexistent_profile_error() {
+        let mut profiles = HashMap::new();
+        profiles.insert("work".to_string(), Config::default());
+        let config = ConfigFile {
+            base: Config::default(),
+            profiles: Some(profiles),
+        };
+
+        let err = apply_profile(config, Some("nonexistent")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Profile 'nonexistent' not found"));
+        assert!(message.contains("Available profiles"));
+        assert!(message.contains("work"));
+    }
+
+    #[test]
+    fn test_profile_with_no_profiles_section() {
+        let config = ConfigFile {
+            base: Config::default(),
+            profiles: None,
+        };
+
+        let err = apply_profile(config, Some("missing")).unwrap_err();
+        assert!(err.to_string().contains("Available profiles: none"));
     }
 }

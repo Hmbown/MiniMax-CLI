@@ -85,7 +85,7 @@ Useful environment variables:
 
 - `MINIMAX_API_KEY` (overrides config)
 - `MINIMAX_BASE_URL` (default: `https://api.minimax.io`; China users may use `https://api.minimaxi.com`)
-- `MINIMAX_PROFILE` (selects `[profiles.<name>]` from config)
+- `MINIMAX_PROFILE` (selects `[profiles.<name>]` from config; errors if missing)
 - `MINIMAX_CONFIG_PATH` (override config file path)
 - `MINIMAX_ALLOW_SHELL`, `MINIMAX_SKILLS_DIR`, `MINIMAX_MCP_CONFIG`, `MINIMAX_NOTES_PATH`
 
