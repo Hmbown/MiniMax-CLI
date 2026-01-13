@@ -16,9 +16,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use wait_timeout::ChildExt;
 
 /// Events that can trigger hook execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -547,27 +549,62 @@ impl HookExecutor {
             .clone()
             .unwrap_or_else(|| self.default_working_dir.clone());
 
-        // Get timeout from hook or global config (reserved for future use with timeout handling)
-        let _timeout_secs = self
+        let timeout_secs = self
             .config
             .default_timeout_secs
             .unwrap_or(hook.timeout_secs);
+        let timeout = Duration::from_secs(timeout_secs);
 
-        let result = Self::build_shell_command(&hook.command)
+        let mut child = match Self::build_shell_command(&hook.command)
             .current_dir(&working_dir)
             .envs(env_vars)
-            .output();
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                return HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Failed to spawn hook: {e}")),
+                }
+            }
+        };
 
-        match result {
-            Ok(output) => HookResult {
+        fn read_pipe(mut pipe: impl Read) -> String {
+            let mut buf = String::new();
+            let _ = pipe.read_to_string(&mut buf);
+            buf
+        }
+
+        match child.wait_timeout(timeout) {
+            Ok(Some(status)) => HookResult {
                 name: hook.name.clone(),
-                success: output.status.success(),
-                exit_code: output.status.code(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                success: status.success(),
+                exit_code: status.code(),
+                stdout: child.stdout.take().map(read_pipe).unwrap_or_default(),
+                stderr: child.stderr.take().map(read_pipe).unwrap_or_default(),
                 duration: started.elapsed(),
                 error: None,
             },
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                HookResult {
+                    name: hook.name.clone(),
+                    success: false,
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration: started.elapsed(),
+                    error: Some(format!("Hook timed out after {}s", timeout_secs)),
+                }
+            }
             Err(e) => HookResult {
                 name: hook.name.clone(),
                 success: false,
@@ -575,7 +612,7 @@ impl HookExecutor {
                 stdout: String::new(),
                 stderr: String::new(),
                 duration: started.elapsed(),
-                error: Some(format!("Failed to execute hook: {e}")),
+                error: Some(format!("Failed to wait for hook: {e}")),
             },
         }
     }
@@ -619,6 +656,8 @@ impl HookExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[test]
     fn test_hook_event_as_str() {
@@ -734,6 +773,22 @@ mod tests {
             hook.condition,
             Some(HookCondition::ToolCategory { .. })
         ));
+    }
+
+    #[test]
+    fn test_hook_timeout_enforced() {
+        let command = if cfg!(windows) {
+            "ping -n 3 127.0.0.1 > nul"
+        } else {
+            "sleep 2"
+        };
+        let hook = Hook::new(HookEvent::SessionStart, command).with_timeout(1);
+        let executor = HookExecutor::new(HooksConfig::default(), PathBuf::from("."));
+        let env_vars = HashMap::new();
+
+        let result = executor.execute_sync(&hook, &env_vars);
+        assert!(!result.success);
+        assert!(result.error.as_ref().is_some_and(|e| e.contains("timed out")));
     }
 
     #[test]
