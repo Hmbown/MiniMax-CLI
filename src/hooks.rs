@@ -572,7 +572,7 @@ impl HookExecutor {
                     stderr: String::new(),
                     duration: started.elapsed(),
                     error: Some(format!("Failed to spawn hook: {e}")),
-                }
+                };
             }
         };
 
@@ -788,7 +788,12 @@ mod tests {
 
         let result = executor.execute_sync(&hook, &env_vars);
         assert!(!result.success);
-        assert!(result.error.as_ref().is_some_and(|e| e.contains("timed out")));
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("timed out"))
+        );
     }
 
     #[test]

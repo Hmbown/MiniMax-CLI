@@ -586,8 +586,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let temp_root =
-            env::temp_dir().join(format!("minimax-cli-tilde-test-{}-{}", std::process::id(), nanos));
+        let temp_root = env::temp_dir().join(format!(
+            "minimax-cli-tilde-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
 
@@ -648,8 +651,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let temp_root =
-            env::temp_dir().join(format!("minimax-cli-api-key-test-{}-{}", std::process::id(), nanos));
+        let temp_root = env::temp_dir().join(format!(
+            "minimax-cli-api-key-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
         fs::create_dir_all(&temp_root)?;
         let _guard = EnvGuard::new(&temp_root);
 
