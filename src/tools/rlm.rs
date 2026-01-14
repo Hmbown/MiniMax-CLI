@@ -19,6 +19,7 @@ const DEFAULT_QUERY_MAX_TOKENS: u32 = 2048;
 const MAX_QUERY_MAX_TOKENS: u32 = 8192;
 const MAX_EXEC_OUTPUT_CHARS: usize = 12_000;
 const MAX_QUERY_CHARS: usize = 400_000;
+const DEFAULT_AUTO_CHUNK_MAX_CHARS: usize = 20_000;
 
 fn normalize_load_path(raw: &str) -> Result<String, ToolError> {
     let trimmed = raw.trim();
@@ -64,7 +65,7 @@ impl ToolSpec for RlmExecTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute an RLM expression against the current context. Supports: len, line_count, lines(), search(), chunk(), chunk_sections(), chunk_lines(), vars/get/set/append/del."
+        "Execute an RLM expression against the current context. Supports: len, line_count, lines(), search(), chunk(), chunk_sections(), chunk_lines(), chunk_auto(), vars/get/set/append/del."
     }
 
     fn input_schema(&self) -> Value {
@@ -292,7 +293,7 @@ impl ToolSpec for RlmQueryTool {
     }
 
     fn description(&self) -> &'static str {
-        "Run a focused LLM query over a context slice. Provide line/char range or chunk index; use batch for multiple queries."
+        "Run a focused LLM query over a context slice. Provide line/char range or chunk index; use batch for multiple queries or auto_chunks for chunk_auto batching."
     }
 
     fn input_schema(&self) -> Value {
@@ -313,6 +314,18 @@ impl ToolSpec for RlmQueryTool {
                 "mode": { "type": "string", "description": "analysis (default) or verify" },
                 "store_as": { "type": "string", "description": "Store the FINAL answer in a variable" },
                 "max_tokens": { "type": "integer", "description": "Override max tokens for the sub-call" },
+                "auto_chunks": {
+                    "type": "boolean",
+                    "description": "Use chunk_auto and run the same query for each chunk"
+                },
+                "auto_max_chars": {
+                    "type": "integer",
+                    "description": "Max chars per auto chunk (default: 20000)"
+                },
+                "auto_max_chunks": {
+                    "type": "integer",
+                    "description": "Optional limit on auto chunk count"
+                },
                 "batch": {
                     "type": "array",
                     "description": "Batch multiple queries into a single call",
@@ -355,11 +368,20 @@ impl ToolSpec for RlmQueryTool {
             return Err(ToolError::not_available("RLM query requires an API client"));
         };
 
+        let auto_chunks = input
+            .get("auto_chunks")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let batch_items = input.get("batch").and_then(|v| v.as_array());
-        let query = if batch_items.is_some() {
-            optional_str(&input, "query").unwrap_or("").to_string()
-        } else {
+        if auto_chunks && batch_items.is_some() {
+            return Err(ToolError::invalid_input(
+                "auto_chunks cannot be combined with batch queries".to_string(),
+            ));
+        }
+        let query = if auto_chunks || batch_items.is_none() {
             required_str(&input, "query")?.to_string()
+        } else {
+            optional_str(&input, "query").unwrap_or("").to_string()
         };
         let context_id = optional_str(&input, "context_id").map(str::to_string);
         let mode = optional_str(&input, "mode").unwrap_or("analysis");
@@ -367,7 +389,53 @@ impl ToolSpec for RlmQueryTool {
         let default_max = default_query_max_tokens(&self.model);
         let max_tokens = optional_u64(&input, "max_tokens", u64::from(default_max))
             .clamp(256, u64::from(MAX_QUERY_MAX_TOKENS)) as u32;
-        let (prompt, used_context_id, batch_count) = if let Some(items) = batch_items {
+        let (prompt, used_context_id, batch_count) = if auto_chunks {
+            let max_chars = optional_u64(
+                &input,
+                "auto_max_chars",
+                DEFAULT_AUTO_CHUNK_MAX_CHARS as u64,
+            ) as usize;
+            let max_chunks = optional_u64(&input, "auto_max_chunks", 0) as usize;
+            let (chunks, ctx_id) = self.extract_auto_chunks(context_id.as_deref(), max_chars)?;
+            if chunks.is_empty() {
+                return Err(ToolError::invalid_input(
+                    "No chunks available for auto_chunks".to_string(),
+                ));
+            }
+            if max_chunks > 0 && chunks.len() > max_chunks {
+                return Err(ToolError::invalid_input(format!(
+                    "auto_chunks produced {} chunks; reduce input or set auto_max_chunks",
+                    chunks.len()
+                )));
+            }
+            let mut queries = Vec::new();
+            let mut total_len = 0usize;
+            for (idx, chunk) in chunks.iter().enumerate() {
+                let task = format!(
+                    "TASK {}:\nContext:\n{}\n\nQuestion:\n{}\n",
+                    idx + 1,
+                    chunk,
+                    query
+                );
+                total_len = total_len.saturating_add(task.len());
+                if total_len > MAX_QUERY_CHARS {
+                    return Err(ToolError::invalid_input(
+                        "auto_chunks payload too large; lower auto_max_chars or use manual batching"
+                            .to_string(),
+                    ));
+                }
+                queries.push(task);
+            }
+            (
+                format!(
+                    "{}\n\n{}",
+                    rlm_subcall_prompt(mode, true),
+                    queries.join("\n")
+                ),
+                ctx_id,
+                queries.len(),
+            )
+        } else if let Some(items) = batch_items {
             if items.is_empty() {
                 return Err(ToolError::invalid_input(
                     "Batch must include at least one query".to_string(),
@@ -542,6 +610,33 @@ impl RlmQueryTool {
         };
 
         Ok((chunk, ctx_id))
+    }
+
+    fn extract_auto_chunks(
+        &self,
+        fallback_context_id: Option<&str>,
+        max_chars: usize,
+    ) -> Result<(Vec<String>, String), ToolError> {
+        let session = self
+            .session
+            .lock()
+            .map_err(|_| ToolError::execution_failed("Failed to lock RLM session"))?;
+
+        let ctx_id = fallback_context_id
+            .unwrap_or_else(|| session.active_context.as_str())
+            .to_string();
+
+        let ctx = session
+            .get_context(&ctx_id)
+            .ok_or_else(|| ToolError::invalid_input(format!("Context '{ctx_id}' not loaded")))?;
+
+        let chunks = ctx.chunk_auto(max_chars.max(1));
+        let mut outputs = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            outputs.push(ctx.peek(chunk.start_char, Some(chunk.end_char)).to_string());
+        }
+
+        Ok((outputs, ctx_id))
     }
 
     fn record_usage(

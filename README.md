@@ -113,7 +113,7 @@ Switch modes with `Tab`:
 - **Agent**: multi-step tool use (with approvals)
 - **YOLO**: full tool access without approvals
 - **RLM**: chat over externalized context; use `/repl` for expression mode
-- **Auto-RLM**: if you ask to analyze a large file (or “largest file”), MiniMax auto-switches to RLM and loads it.
+- **Auto-RLM**: large file requests, “largest file,” or big pasted blocks auto-switch to RLM and load into context.
 
 Approvals by mode:
 - **Normal/Plan**: prompts for file writes + shell + paid tools

@@ -397,6 +397,100 @@ impl RlmContext {
         chunks
     }
 
+    /// Chunk the context using headings, paragraphs, and code fences.
+    #[must_use]
+    pub fn chunk_auto(&self, max_chars: usize) -> Vec<ChunkInfo> {
+        let max_chars = max_chars.max(1);
+        let mut segments = Vec::new();
+        let mut start = 0;
+        let mut offset = 0;
+        let mut in_code_block = false;
+
+        for segment in self.content.split_inclusive('\n') {
+            let line = segment.trim_end_matches('\n');
+            let trimmed = line.trim();
+            let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+            let is_heading = trimmed.starts_with('#');
+            let is_blank = trimmed.is_empty();
+
+            if is_fence {
+                if !in_code_block {
+                    if offset > start {
+                        segments.push((start, offset));
+                    }
+                    start = offset;
+                    in_code_block = true;
+                } else {
+                    in_code_block = false;
+                }
+            } else if !in_code_block {
+                if is_heading && offset > start {
+                    segments.push((start, offset));
+                    start = offset;
+                }
+
+                if is_blank && offset > start {
+                    segments.push((start, offset));
+                    start = offset;
+                }
+            }
+
+            offset += segment.len();
+
+            if is_fence && !in_code_block && offset > start {
+                segments.push((start, offset));
+                start = offset;
+            }
+        }
+
+        if offset > start {
+            segments.push((start, offset));
+        }
+
+        let mut normalized = Vec::new();
+        for (seg_start, seg_end) in segments {
+            let mut cursor = seg_start;
+            while cursor < seg_end {
+                let end = (cursor + max_chars).min(seg_end);
+                normalized.push((cursor, end));
+                cursor = end;
+            }
+        }
+
+        let mut chunks = Vec::new();
+        let mut chunk_start = 0;
+        let mut chunk_end = 0;
+        let mut chunk_index = 0;
+
+        for (seg_start, seg_end) in normalized {
+            if chunk_end == 0 {
+                chunk_start = seg_start;
+            }
+            if seg_end - chunk_start > max_chars && chunk_end > chunk_start {
+                chunks.push(build_chunk_info(
+                    &self.content,
+                    chunk_index,
+                    chunk_start,
+                    chunk_end,
+                ));
+                chunk_index += 1;
+                chunk_start = seg_start;
+            }
+            chunk_end = seg_end;
+        }
+
+        if chunk_end > chunk_start {
+            chunks.push(build_chunk_info(
+                &self.content,
+                chunk_index,
+                chunk_start,
+                chunk_end,
+            ));
+        }
+
+        chunks
+    }
+
     #[must_use]
     pub fn get_var(&self, name: &str) -> Option<&str> {
         self.variables.get(name).map(String::as_str)
@@ -851,6 +945,25 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
         return Ok(output.join("\n"));
     }
 
+    if code.starts_with("chunk_auto(") && code.ends_with(')') {
+        let args = &code[11..code.len() - 1];
+        let size: usize = args.trim().parse().unwrap_or(20_000);
+        let chunks = ctx.chunk_auto(size);
+        let output: Vec<String> = chunks
+            .iter()
+            .map(|c| {
+                format!(
+                    "Auto {}: chars {}..{} - {}",
+                    c.index,
+                    c.start_char,
+                    c.end_char,
+                    &c.preview[..50.min(c.preview.len())]
+                )
+            })
+            .collect();
+        return Ok(output.join("\n"));
+    }
+
     if code == "head" || code == "head()" {
         return Ok(format_lines(ctx, 1, Some(10)));
     }
@@ -861,7 +974,7 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
     }
 
     anyhow::bail!(
-        "Failed to evaluate expression: unknown expression '{code}'. Supported: len, line_count, peek(start, end), lines(start, end), search(pattern), chunk(size, overlap), chunk_sections(max_chars), chunk_lines(max_lines), vars, get(name), set(name, value), append(name, value), del(name), clear_vars, head, tail"
+        "Failed to evaluate expression: unknown expression '{code}'. Supported: len, line_count, peek(start, end), lines(start, end), search(pattern), chunk(size, overlap), chunk_sections(max_chars), chunk_lines(max_lines), chunk_auto(max_chars), vars, get(name), set(name, value), append(name, value), del(name), clear_vars, head, tail"
     )
 }
 
@@ -1059,6 +1172,9 @@ fn print_repl_help() {
     println!("  lines(s, e)      Lines from s to e");
     println!("  search(pattern)  Regex search");
     println!("  chunk(size, overlap)  Split into chunks");
+    println!("  chunk_sections(max)   Chunk by headings/paragraphs");
+    println!("  chunk_lines(max)      Chunk by line count");
+    println!("  chunk_auto(max)       Chunk by headings + paragraphs + code fences");
 }
 
 fn print_status(session: &RlmSession) {
@@ -1153,5 +1269,14 @@ mod tests {
         let ctx = RlmContext::new("test", content, None);
         let chunks = ctx.chunk_sections(20);
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn rlm_chunk_auto_splits_on_paragraphs_and_fences() {
+        let content = "# Title\nalpha\n\n```rust\ncode\n```\n\nbeta".to_string();
+        let ctx = RlmContext::new("test", content, None);
+        let chunks = ctx.chunk_auto(20);
+        assert!(chunks.len() >= 2);
+        assert!(chunks.iter().all(|chunk| !chunk.preview.is_empty()));
     }
 }

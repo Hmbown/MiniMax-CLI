@@ -25,8 +25,10 @@ pub fn welcome_message() -> String {
         "  lines(1, 20)",
         "  chunk(2000, 200)",
         "  chunk_sections(20000)",
+        "  chunk_auto(20000)",
         "  vars(), get(\"name\"), set(\"name\", \"value\")",
         "",
+        "Tip: rlm_query auto_chunks runs the same question over chunk_auto slices.",
         "Tip: /save-session <path> persists the current RLM session.",
     ]
     .join("\n")

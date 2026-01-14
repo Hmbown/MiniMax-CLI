@@ -225,6 +225,14 @@ impl QueuedMessage {
             self.display.clone()
         }
     }
+
+    pub fn content_with_query(&self, query: &str) -> String {
+        if let Some(skill_instruction) = self.skill_instruction.as_ref() {
+            format!("{skill_instruction}\n\n---\n\nUser request: {query}")
+        } else {
+            query.to_string()
+        }
+    }
 }
 
 // === Errors ===

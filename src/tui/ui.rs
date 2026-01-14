@@ -59,6 +59,16 @@ const MINIMAX_ORANGE: Color = Color::Rgb(255, 165, 80);
 const MAX_QUEUED_PREVIEW: usize = 3;
 const AUTO_RLM_MIN_FILE_BYTES: u64 = 200_000;
 const AUTO_RLM_HINT_FILE_BYTES: u64 = 50_000;
+const AUTO_RLM_PASTE_MIN_CHARS: usize = 15_000;
+const AUTO_RLM_PASTE_HINT_CHARS: usize = 5_000;
+const AUTO_RLM_PASTE_QUERY_MAX_CHARS: usize = 800;
+const AUTO_RLM_PASTE_FIRST_LINE_MAX_CHARS: usize = 200;
+const RLM_BUDGET_WARN_QUERIES: u32 = 8;
+const RLM_BUDGET_WARN_INPUT_TOKENS: u64 = 60_000;
+const RLM_BUDGET_WARN_OUTPUT_TOKENS: u64 = 20_000;
+const RLM_BUDGET_HARD_QUERIES: u32 = 16;
+const RLM_BUDGET_HARD_INPUT_TOKENS: u64 = 120_000;
+const RLM_BUDGET_HARD_OUTPUT_TOKENS: u64 = 40_000;
 const AUTO_RLM_MAX_SCAN_ENTRIES: usize = 50_000;
 const AUTO_RLM_EXCLUDED_DIRS: &[&str] = &[
     ".git",
@@ -874,8 +884,12 @@ async fn dispatch_user_message(
     engine_handle: &EngineHandle,
     message: QueuedMessage,
 ) -> Result<()> {
-    let content = message.content();
-    maybe_auto_switch_to_rlm(app, &message.display);
+    let override_query = maybe_auto_switch_to_rlm(app, &message.display);
+    let content = if let Some(query) = override_query.as_deref() {
+        message.content_with_query(query)
+    } else {
+        message.content()
+    };
     let rlm_summary = if app.mode == AppMode::Rlm {
         app.rlm_session
             .lock()
@@ -946,46 +960,104 @@ fn handle_rlm_input(app: &mut App, input: String) {
 }
 
 struct AutoRlmDecision {
-    path: Option<PathBuf>,
+    source: AutoRlmSource,
     reason: String,
 }
 
-fn maybe_auto_switch_to_rlm(app: &mut App, input: &str) {
-    if app.mode == AppMode::Rlm {
-        return;
+enum AutoRlmSource {
+    File(PathBuf),
+    Paste {
+        content: String,
+        query: Option<String>,
+    },
+    None,
+}
+
+struct AutoRlmLoaded {
+    context_id: String,
+    line_count: usize,
+    char_count: usize,
+}
+
+fn maybe_auto_switch_to_rlm(app: &mut App, input: &str) -> Option<String> {
+    let already_rlm = app.mode == AppMode::Rlm;
+    let decision = auto_rlm_decision(app, input, already_rlm)?;
+
+    if !already_rlm {
+        app.set_mode(AppMode::Rlm);
+        app.rlm_repl_active = false;
     }
 
-    let Some(decision) = auto_rlm_decision(app, input) else {
-        return;
-    };
+    let mut messages = vec![if already_rlm {
+        format!("Auto-loaded RLM context ({})", decision.reason)
+    } else {
+        format!("Auto-switched to RLM mode ({})", decision.reason)
+    }];
+    let mut override_query = None;
 
-    app.set_mode(AppMode::Rlm);
-    app.rlm_repl_active = false;
-
-    let mut messages = vec![format!("Auto-switched to RLM mode ({})", decision.reason)];
-
-    if let Some(path) = decision.path.as_ref() {
-        let load_command = format!("/load {}", format_load_path(app, path));
-        let result = commands::execute(&load_command, app);
-        if let Some(msg) = result.message {
-            messages.push(msg);
-        }
+    match decision.source {
+        AutoRlmSource::File(path) => match load_file_into_rlm(app, &path) {
+            Ok(loaded) => {
+                messages.push(format!(
+                    "Loaded {} as '{}' ({} lines, {} chars)",
+                    format_load_path(app, &path),
+                    loaded.context_id,
+                    loaded.line_count,
+                    loaded.char_count
+                ));
+                override_query = Some(format!(
+                    "{}\n\nUse RLM context '{}' loaded from {}.",
+                    input.trim(),
+                    loaded.context_id,
+                    format_load_path(app, &path)
+                ));
+            }
+            Err(err) => {
+                messages.push(format!("RLM auto-load failed: {err}"));
+            }
+        },
+        AutoRlmSource::Paste { content, query } => match load_paste_into_rlm(app, content) {
+            Ok(loaded) => {
+                messages.push(format!(
+                    "Loaded pasted content as '{}' ({} lines, {} chars)",
+                    loaded.context_id, loaded.line_count, loaded.char_count
+                ));
+                let base_query = query.unwrap_or_else(|| {
+                    "Analyze the pasted content and answer the user request.".to_string()
+                });
+                override_query = Some(format!(
+                    "{base_query}\n\nRLM context: '{}'.",
+                    loaded.context_id
+                ));
+            }
+            Err(err) => {
+                messages.push(format!("RLM auto-load failed: {err}"));
+                override_query = Some(
+                    "The user pasted a large block, but auto-loading failed. Ask them to retry /load or paste again."
+                        .to_string(),
+                );
+            }
+        },
+        AutoRlmSource::None => {}
     }
 
     app.add_message(HistoryCell::System {
         content: messages.join("\n"),
     });
+
+    override_query
 }
 
-fn auto_rlm_decision(app: &App, input: &str) -> Option<AutoRlmDecision> {
+fn auto_rlm_decision(app: &App, input: &str, already_rlm: bool) -> Option<AutoRlmDecision> {
     let input_lower = input.to_lowercase();
     let wants_largest_file = input_lower.contains("largest file")
         || input_lower.contains("biggest file")
         || input_lower.contains("largest files");
-    let explicit_rlm = input_lower
+    let explicit_rlm_request = input_lower
         .split_whitespace()
         .any(|word| word.trim_matches(|c: char| !c.is_ascii_alphanumeric()) == "rlm")
         || input_lower.contains("rlm mode");
+    let explicit_rlm = already_rlm || explicit_rlm_request;
     let has_hint = input_lower.contains("chunk")
         || input_lower.contains("chunking")
         || input_lower.contains("huge")
@@ -998,17 +1070,21 @@ fn auto_rlm_decision(app: &App, input: &str) -> Option<AutoRlmDecision> {
         || input_lower.contains("full project")
         || explicit_rlm;
 
+    if let Some(decision) = auto_rlm_paste_decision(input, explicit_rlm, has_hint) {
+        return Some(decision);
+    }
+
     if wants_largest_file && let Some((path, size)) = find_largest_file(&app.workspace) {
         return Some(AutoRlmDecision {
-            path: Some(path),
+            source: AutoRlmSource::File(path),
             reason: format!("requested largest file ({} bytes)", size),
         });
     }
 
     let Some(candidate) = detect_requested_file(input, &app.workspace) else {
-        if explicit_rlm {
+        if explicit_rlm_request && !already_rlm {
             return Some(AutoRlmDecision {
-                path: None,
+                source: AutoRlmSource::None,
                 reason: "explicit RLM request".to_string(),
             });
         }
@@ -1037,13 +1113,113 @@ fn auto_rlm_decision(app: &App, input: &str) -> Option<AutoRlmDecision> {
     } else {
         AUTO_RLM_MIN_FILE_BYTES
     };
-    if size < min_bytes {
+    if size < min_bytes && !explicit_rlm {
+        return None;
+    }
+
+    let reason = if explicit_rlm_request && !already_rlm {
+        format!("explicit RLM file request ({} bytes)", size)
+    } else if already_rlm {
+        format!("RLM file request ({} bytes)", size)
+    } else {
+        format!("large file ({} bytes)", size)
+    };
+
+    Some(AutoRlmDecision {
+        source: AutoRlmSource::File(candidate),
+        reason,
+    })
+}
+
+fn auto_rlm_paste_decision(
+    input: &str,
+    explicit_rlm: bool,
+    has_hint: bool,
+) -> Option<AutoRlmDecision> {
+    let min_chars = if explicit_rlm || has_hint {
+        AUTO_RLM_PASTE_HINT_CHARS
+    } else {
+        AUTO_RLM_PASTE_MIN_CHARS
+    };
+
+    if input.len() < min_chars {
+        return None;
+    }
+
+    let (query, content) = split_paste_input(input);
+    if content.len() < min_chars {
         return None;
     }
 
     Some(AutoRlmDecision {
-        path: Some(candidate),
-        reason: format!("large file ({} bytes)", size),
+        source: AutoRlmSource::Paste { content, query },
+        reason: format!("pasted content ({} chars)", input.len()),
+    })
+}
+
+fn split_paste_input(input: &str) -> (Option<String>, String) {
+    let trimmed = input.trim();
+
+    if let Some(idx) = trimmed.find("```").or_else(|| trimmed.find("~~~")) {
+        let (prefix, rest) = trimmed.split_at(idx);
+        let query = clean_query_prefix(prefix);
+        if !query.is_empty() && query.len() <= AUTO_RLM_PASTE_QUERY_MAX_CHARS {
+            return (Some(query.to_string()), rest.trim_start().to_string());
+        }
+    }
+
+    if let Some(idx) = trimmed.find("\n\n") {
+        let (prefix, rest) = trimmed.split_at(idx);
+        let query = clean_query_prefix(prefix);
+        if !query.is_empty() && query.len() <= AUTO_RLM_PASTE_QUERY_MAX_CHARS {
+            return (Some(query.to_string()), rest.trim_start().to_string());
+        }
+    }
+
+    if let Some((first, rest)) = trimmed.split_once('\n') {
+        let query = clean_query_prefix(first);
+        if !query.is_empty() && query.len() <= AUTO_RLM_PASTE_FIRST_LINE_MAX_CHARS {
+            return (Some(query.to_string()), rest.trim_start().to_string());
+        }
+    }
+
+    (None, trimmed.to_string())
+}
+
+fn clean_query_prefix(prefix: &str) -> &str {
+    prefix.trim().trim_end_matches(':')
+}
+
+fn load_file_into_rlm(app: &mut App, path: &Path) -> Result<AutoRlmLoaded, String> {
+    let mut session = app
+        .rlm_session
+        .lock()
+        .map_err(|_| "Failed to access RLM session".to_string())?;
+    let base_id = rlm::context_id_from_path(path);
+    let context_id = rlm::unique_context_id(&session, &base_id);
+    let (line_count, char_count) = session
+        .load_file(&context_id, path)
+        .map_err(|err| err.to_string())?;
+    Ok(AutoRlmLoaded {
+        context_id,
+        line_count,
+        char_count,
+    })
+}
+
+fn load_paste_into_rlm(app: &mut App, content: String) -> Result<AutoRlmLoaded, String> {
+    let mut session = app
+        .rlm_session
+        .lock()
+        .map_err(|_| "Failed to access RLM session".to_string())?;
+    let context_id = rlm::unique_context_id(&session, "paste");
+    let line_count = content.lines().count();
+    let char_count = content.len();
+    session.load_context(&context_id, content, Some("pasted input".to_string()));
+    Ok(AutoRlmLoaded {
+        context_id,
+        line_count,
+        char_count,
     })
 }
 
@@ -1197,6 +1373,7 @@ fn looks_like_rlm_expr(input: &str) -> bool {
             | "chunk"
             | "chunk_sections"
             | "chunk_lines"
+            | "chunk_auto"
             | "vars"
             | "get"
             | "set"
@@ -1493,6 +1670,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(context_indicator(app), Style::default().fg(Color::DarkGray)),
     ];
 
+    if let Some((label, style)) = rlm_usage_badge(app) {
+        spans.push(Span::raw(" | "));
+        spans.push(Span::styled(label, style));
+    }
+
     if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
@@ -1544,6 +1726,37 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
     let footer = Paragraph::new(Line::from(spans));
     f.render_widget(footer, area);
+}
+
+fn rlm_usage_badge(app: &App) -> Option<(String, Style)> {
+    let session = app.rlm_session.lock().ok()?;
+    let usage = &session.usage;
+    if usage.queries == 0 {
+        return None;
+    }
+
+    let warn = usage.queries >= RLM_BUDGET_WARN_QUERIES
+        || usage.input_tokens >= RLM_BUDGET_WARN_INPUT_TOKENS
+        || usage.output_tokens >= RLM_BUDGET_WARN_OUTPUT_TOKENS;
+    let hard = usage.queries >= RLM_BUDGET_HARD_QUERIES
+        || usage.input_tokens >= RLM_BUDGET_HARD_INPUT_TOKENS
+        || usage.output_tokens >= RLM_BUDGET_HARD_OUTPUT_TOKENS;
+
+    let style = if hard {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if warn {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    Some((
+        format!(
+            "RLM q:{} in/out:{} /{}",
+            usage.queries, usage.input_tokens, usage.output_tokens
+        ),
+        style,
+    ))
 }
 
 fn mode_color(mode: AppMode) -> Color {
@@ -3062,8 +3275,8 @@ mod tests {
         fs::write(&big, content).expect("write");
 
         let app = make_test_app_with_workspace(tmp.path().to_path_buf());
-        let decision = auto_rlm_decision(&app, "analyze big.txt").expect("decision");
-        assert_eq!(decision.path, Some(big));
+        let decision = auto_rlm_decision(&app, "analyze big.txt", false).expect("decision");
+        assert!(matches!(decision.source, AutoRlmSource::File(path) if path == big));
     }
 
     #[test]
@@ -3075,15 +3288,32 @@ mod tests {
         fs::write(&big, b"this is larger").expect("write");
 
         let app = make_test_app_with_workspace(tmp.path().to_path_buf());
-        let decision = auto_rlm_decision(&app, "analyze the largest file").expect("decision");
-        assert_eq!(decision.path, Some(big));
+        let decision =
+            auto_rlm_decision(&app, "analyze the largest file", false).expect("decision");
+        assert!(matches!(decision.source, AutoRlmSource::File(path) if path == big));
     }
 
     #[test]
     fn auto_rlm_triggers_on_explicit_request() {
         let tmp = tempdir().expect("tempdir");
         let app = make_test_app_with_workspace(tmp.path().to_path_buf());
-        let decision = auto_rlm_decision(&app, "use rlm mode").expect("decision");
-        assert!(decision.path.is_none());
+        let decision = auto_rlm_decision(&app, "use rlm mode", false).expect("decision");
+        assert!(matches!(decision.source, AutoRlmSource::None));
+    }
+
+    #[test]
+    fn auto_rlm_triggers_on_large_paste() {
+        let tmp = tempdir().expect("tempdir");
+        let app = make_test_app_with_workspace(tmp.path().to_path_buf());
+        let content = "a".repeat(AUTO_RLM_PASTE_MIN_CHARS + 5);
+        let input = format!("Summarize this\n\n{content}");
+        let decision = auto_rlm_decision(&app, &input, false).expect("decision");
+        match decision.source {
+            AutoRlmSource::Paste { content, query } => {
+                assert!(content.len() >= AUTO_RLM_PASTE_MIN_CHARS);
+                assert_eq!(query.as_deref(), Some("Summarize this"));
+            }
+            _ => panic!("expected paste decision"),
+        }
     }
 }

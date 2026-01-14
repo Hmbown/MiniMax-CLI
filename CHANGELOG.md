@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-01-14
+
+### Added
+- Auto-RLM for large pasted blocks with context auto-load
+- `chunk_auto` and `rlm_query` `auto_chunks` for quick document sweeps
+- RLM usage badge with budget warnings in the footer
+
+### Changed
+- Auto-RLM now honors explicit RLM file requests even for smaller files
+
 ## [0.1.5] - 2026-01-14
 
 ### Added
@@ -33,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.0...v0.1.5
 [0.1.0]: https://github.com/Hmbown/MiniMax-CLI/releases/tag/v0.1.0

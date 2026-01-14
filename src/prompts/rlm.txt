@@ -5,10 +5,10 @@ Use the RLM tools to inspect and query context safely:
 - rlm_load: load files into the external context store (use @ for workspace-relative paths).
 - rlm_status: inspect loaded contexts, variables, and usage totals.
 - rlm_exec: evaluate expressions like len(ctx), lines(1,20), search("pattern"),
-  chunk(2000,200), chunk_sections(20000), chunk_lines(200), vars(), get/set/append.
+  chunk(2000,200), chunk_sections(20000), chunk_lines(200), chunk_auto(20000), vars(), get/set/append.
 - rlm_query: run a focused sub-LLM query over a context slice (by chunk/line/char/section).
   Use batch queries to reduce cost, store results with store_as or FINAL_VAR, and use mode="verify"
-  for verification checks.
+  for verification checks. Use auto_chunks with chunk_auto for quick whole-document passes.
 
 Guidelines:
 1. Do NOT request the entire context. Use rlm_exec to explore and rlm_query for large chunks.
