@@ -14,6 +14,7 @@ pub const NORMAL_PROMPT: &str = include_str!("prompts/normal.txt");
 pub const AGENT_PROMPT: &str = include_str!("prompts/agent.txt");
 pub const PLAN_PROMPT: &str = include_str!("prompts/plan.txt");
 pub const RLM_PROMPT: &str = include_str!("prompts/rlm.txt");
+pub const DUO_PROMPT: &str = include_str!("prompts/duo.txt");
 
 /// Get the system prompt for a specific mode
 pub fn system_prompt_for_mode(mode: AppMode) -> SystemPrompt {
@@ -22,6 +23,7 @@ pub fn system_prompt_for_mode(mode: AppMode) -> SystemPrompt {
         AppMode::Agent | AppMode::Yolo => AGENT_PROMPT,
         AppMode::Plan => PLAN_PROMPT,
         AppMode::Rlm => RLM_PROMPT,
+        AppMode::Duo => DUO_PROMPT,
     };
     SystemPrompt::Text(text.trim().to_string())
 }
@@ -31,12 +33,14 @@ pub fn system_prompt_for_mode_with_context(
     mode: AppMode,
     workspace: &Path,
     rlm_summary: Option<&str>,
+    duo_summary: Option<&str>,
 ) -> SystemPrompt {
     let base_prompt = match mode {
         AppMode::Normal => NORMAL_PROMPT,
         AppMode::Agent | AppMode::Yolo => AGENT_PROMPT,
         AppMode::Plan => PLAN_PROMPT,
         AppMode::Rlm => RLM_PROMPT,
+        AppMode::Duo => DUO_PROMPT,
     };
 
     // Load project context from workspace
@@ -52,6 +56,11 @@ pub fn system_prompt_for_mode_with_context(
     if mode == AppMode::Rlm {
         let summary = rlm_summary.unwrap_or("No RLM contexts loaded.");
         full_prompt = format!("{full_prompt}\n\nRLM Context Summary:\n{summary}");
+    }
+
+    if mode == AppMode::Duo {
+        let summary = duo_summary.unwrap_or("No Duo contexts loaded.");
+        full_prompt = format!("{full_prompt}\n\nDuo Context Summary:\n{summary}");
     }
 
     SystemPrompt::Text(full_prompt)

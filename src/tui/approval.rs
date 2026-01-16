@@ -68,7 +68,7 @@ pub enum ToolCategory {
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
     /// Unique ID for this tool use
-    pub _id: String,
+    pub id: String,
     /// Tool being executed
     pub tool_name: String,
     /// Tool category
@@ -85,7 +85,7 @@ impl ApprovalRequest {
         let estimated_cost = crate::pricing::estimate_tool_cost(tool_name, params);
 
         Self {
-            _id: id.to_string(),
+            id: id.to_string(),
             tool_name: tool_name.to_string(),
             category,
             params: params.clone(),
@@ -156,7 +156,7 @@ pub fn requires_approval(
 
 fn mode_requires_approval(mode: AppMode, category: ToolCategory) -> bool {
     match mode {
-        AppMode::Yolo | AppMode::Rlm => false,
+        AppMode::Yolo | AppMode::Rlm | AppMode::Duo => false,
         AppMode::Agent => matches!(category, ToolCategory::Shell | ToolCategory::PaidMultimedia),
         AppMode::Normal | AppMode::Plan => matches!(
             category,
@@ -223,20 +223,20 @@ impl ApprovalState {
         }
     }
 
-    /// Apply a decision and return it
+    /// Apply a decision and return (tool_use_id, decision)
     pub fn apply_decision(&mut self, decision: ReviewDecision) -> Option<(String, ReviewDecision)> {
         let req = self.pending.take()?;
-        let tool_name = req.tool_name.clone();
+        let tool_use_id = req.id.clone();
 
         if decision == ReviewDecision::ApprovedForSession {
-            self.session_approved.insert(tool_name.clone());
+            self.session_approved.insert(req.tool_name.clone());
         }
 
         self.visible = false;
         self.selected = 0;
         self.requested_at = None;
 
-        Some((tool_name, decision))
+        Some((tool_use_id, decision))
     }
 
     pub fn is_timed_out(&self) -> bool {

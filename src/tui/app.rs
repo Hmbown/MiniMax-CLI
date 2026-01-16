@@ -9,6 +9,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::config::{Config, has_api_key, save_api_key};
+use crate::duo::{SharedDuoSession, new_shared_duo_session};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::models::{Message, SystemPrompt};
 use crate::rlm::{RlmSession, SharedRlmSession};
@@ -41,6 +42,7 @@ pub enum AppMode {
     Yolo,
     Plan,
     Rlm,
+    Duo,
 }
 
 impl AppMode {
@@ -52,6 +54,7 @@ impl AppMode {
             AppMode::Yolo => "YOLO",
             AppMode::Plan => "PLAN",
             AppMode::Rlm => "RLM",
+            AppMode::Duo => "DUO",
         }
     }
 
@@ -64,6 +67,7 @@ impl AppMode {
             AppMode::Yolo => "YOLO mode - full tool access without approvals",
             AppMode::Plan => "Plan mode - design before implementing",
             AppMode::Rlm => "RLM mode - recursive language model sandbox",
+            AppMode::Duo => "Duo mode - dialectical autocoding with player-coach loop",
         }
     }
 }
@@ -157,6 +161,8 @@ pub struct App {
     pub plan_state: SharedPlanState,
     /// RLM sandbox session state
     pub rlm_session: SharedRlmSession,
+    /// Duo mode session state (player-coach autocoding loop)
+    pub duo_session: SharedDuoSession,
     /// Whether RLM REPL input mode is active.
     pub rlm_repl_active: bool,
     /// Todo list for `TodoWriteTool`
@@ -358,7 +364,7 @@ impl App {
             yolo: initial_mode == AppMode::Yolo,
             clipboard: ClipboardHandler::new(),
             approval_state: ApprovalState::new(),
-            approval_mode: if matches!(initial_mode, AppMode::Yolo | AppMode::Rlm) {
+            approval_mode: if matches!(initial_mode, AppMode::Yolo | AppMode::Rlm | AppMode::Duo) {
                 ApprovalMode::Auto
             } else {
                 ApprovalMode::Suggest
@@ -368,6 +374,7 @@ impl App {
             project_doc: None,
             plan_state,
             rlm_session: Arc::new(Mutex::new(RlmSession::default())),
+            duo_session: new_shared_duo_session(),
             rlm_repl_active: false,
             todos: new_shared_todo_list(),
             tool_log: Vec::new(),
@@ -427,7 +434,7 @@ impl App {
         self.allow_shell = true;
         self.trust_mode = matches!(mode, AppMode::Yolo);
         self.yolo = matches!(mode, AppMode::Yolo);
-        self.approval_mode = if matches!(mode, AppMode::Yolo | AppMode::Rlm) {
+        self.approval_mode = if matches!(mode, AppMode::Yolo | AppMode::Rlm | AppMode::Duo) {
             ApprovalMode::Auto
         } else {
             ApprovalMode::Suggest
@@ -443,14 +450,15 @@ impl App {
         let _ = self.hooks.execute(HookEvent::ModeChange, &context);
     }
 
-    /// Cycle through modes: Normal → Plan → Agent → YOLO → RLM → Normal
+    /// Cycle through modes: Normal → Plan → Agent → YOLO → RLM → Duo → Normal
     pub fn cycle_mode(&mut self) {
         let next = match self.mode {
             AppMode::Normal => AppMode::Plan,
             AppMode::Plan => AppMode::Agent,
             AppMode::Agent => AppMode::Yolo,
             AppMode::Yolo => AppMode::Rlm,
-            AppMode::Rlm => AppMode::Normal,
+            AppMode::Rlm => AppMode::Duo,
+            AppMode::Duo => AppMode::Normal,
         };
         self.set_mode(next);
     }

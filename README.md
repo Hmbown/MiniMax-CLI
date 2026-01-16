@@ -77,13 +77,14 @@ See `config.example.toml` and `docs/CONFIGURATION.md` for a full reference.
 
 ## Modes
 
-In the TUI, press `Tab` to cycle modes: **Normal → Plan → Agent → YOLO → RLM → Normal**.
+In the TUI, press `Tab` to cycle modes: **Normal → Plan → Agent → YOLO → RLM → Duo → Normal**.
 
 - **Normal**: chat; asks before file writes, shell, or paid tools
 - **Plan**: design-first prompting; same approvals as Normal
 - **Agent**: multi-step tool use; asks before shell or paid tools
 - **YOLO**: enables shell + trust + auto-approves all tools (dangerous)
 - **RLM**: externalized context + REPL helpers; auto-approves tools (best for large files)
+- **Duo**: player-coach autocoding with iterative validation (based on g3 paper)
 
 Approval behavior is mode-dependent, but you can also override it at runtime with `/set approval_mode auto|suggest|never`.
 
@@ -107,7 +108,17 @@ RLM mode is designed for “too big for context” tasks: large files, whole-doc
 - Use `/repl` to enter expression mode (e.g. `search(\"pattern\")`, `lines(1, 80)`).
 - Power tools: `rlm_load`, `rlm_exec`, `rlm_status`, `rlm_query`.
 
-`rlm_query` can be expensive: prefer batching and check `/status` if you’re doing lots of sub-queries.
+`rlm_query` can be expensive: prefer batching and check `/status` if you're doing lots of sub-queries.
+
+## Duo Mode
+
+Duo mode implements the player-coach autocoding paradigm for iterative development with built-in validation:
+
+- **Player**: implements requirements (builder role)
+- **Coach**: validates implementation against requirements (critic role)
+- Tools: `duo_init`, `duo_player`, `duo_coach`, `duo_advance`, `duo_status`
+
+Workflow: `init → player → coach → advance → (repeat until approved)`
 
 ## Examples
 

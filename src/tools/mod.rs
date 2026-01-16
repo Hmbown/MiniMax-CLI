@@ -4,6 +4,7 @@
 
 // === Modules ===
 
+pub mod duo;
 pub mod file;
 pub mod minimax;
 pub mod patch;

@@ -56,6 +56,7 @@ use super::history::{
 const MINIMAX_RED: Color = Color::Rgb(220, 80, 80);
 const MINIMAX_CORAL: Color = Color::Rgb(240, 128, 100);
 const MINIMAX_ORANGE: Color = Color::Rgb(255, 165, 80);
+const MINIMAX_CYAN: Color = Color::Rgb(80, 200, 200);
 const MAX_QUEUED_PREVIEW: usize = 3;
 const AUTO_RLM_MIN_FILE_BYTES: u64 = 200_000;
 const AUTO_RLM_HINT_FILE_BYTES: u64 = 50_000;
@@ -178,6 +179,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         max_steps: 100,
         max_subagents: app.max_subagents,
         rlm_session: app.rlm_session.clone(),
+        duo_session: app.duo_session.clone(),
     };
 
     // Spawn the Engine - it will handle all API communication
@@ -710,11 +712,19 @@ async fn run_event_loop(
                 }
                 KeyCode::Tab => {
                     app.cycle_mode();
-                    if app.mode == AppMode::Rlm {
-                        app.rlm_repl_active = false;
-                        app.add_message(HistoryCell::System {
-                            content: crate::commands::rlm::welcome_message(),
-                        });
+                    match app.mode {
+                        AppMode::Rlm => {
+                            app.rlm_repl_active = false;
+                            app.add_message(HistoryCell::System {
+                                content: crate::commands::rlm::welcome_message(),
+                            });
+                        }
+                        AppMode::Duo => {
+                            app.add_message(HistoryCell::System {
+                                content: duo_welcome_message(),
+                            });
+                        }
+                        _ => {}
                     }
                 }
                 // Input handling
@@ -898,10 +908,19 @@ async fn dispatch_user_message(
     } else {
         None
     };
+    let duo_summary = if app.mode == AppMode::Duo {
+        app.duo_session
+            .lock()
+            .ok()
+            .map(|s| crate::duo::session_summary(&s))
+    } else {
+        None
+    };
     app.system_prompt = Some(prompts::system_prompt_for_mode_with_context(
         app.mode,
         &app.workspace,
         rlm_summary.as_deref(),
+        duo_summary.as_deref(),
     ));
     app.add_message(HistoryCell::User {
         content: message.display.clone(),
@@ -1766,6 +1785,7 @@ fn mode_color(mode: AppMode) -> Color {
         AppMode::Yolo => Color::Green,
         AppMode::Plan => MINIMAX_ORANGE,
         AppMode::Rlm => MINIMAX_CORAL,
+        AppMode::Duo => MINIMAX_CYAN,
     }
 }
 
@@ -1774,6 +1794,25 @@ fn mode_badge_style(mode: AppMode) -> Style {
         .fg(Color::White)
         .bg(mode_color(mode))
         .add_modifier(Modifier::BOLD)
+}
+
+fn duo_welcome_message() -> String {
+    [
+        "MiniMax Duo Mode (Player-Coach Autocoding)",
+        "Based on the g3 paper's adversarial cooperation paradigm",
+        "Press Tab to exit Duo mode",
+        "",
+        "Tools available:",
+        "  duo_init     - Initialize session with requirements",
+        "  duo_player   - Get implementation prompt (builder role)",
+        "  duo_coach    - Get validation prompt (critic role)",
+        "  duo_advance  - Submit coach feedback and advance state",
+        "  duo_status   - Check current session state",
+        "",
+        "Workflow: init → player → coach → advance → (repeat until approved)",
+        "The coach validates implementation against requirements.",
+    ]
+    .join("\n")
 }
 
 fn prompt_for_mode(mode: AppMode, rlm_repl_active: bool) -> &'static str {
@@ -1789,6 +1828,7 @@ fn prompt_for_mode(mode: AppMode, rlm_repl_active: bool) -> &'static str {
                 "rlm> "
             }
         }
+        AppMode::Duo => "duo> ",
     }
 }
 
@@ -1841,13 +1881,11 @@ fn layout_input(
 fn cursor_row_col(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     let mut row = 0usize;
     let mut col = 0usize;
-    let mut idx = 0usize;
 
-    for ch in input.chars() {
-        if idx >= cursor {
+    for (char_idx, ch) in input.chars().enumerate() {
+        if char_idx >= cursor {
             break;
         }
-        idx += ch.len_utf8();
 
         if ch == '\n' {
             row += 1;
@@ -1939,17 +1977,91 @@ fn apply_selection(lines: &mut [Line<'static>], top: usize, app: &App) {
         return;
     };
 
+    let selection_style = Style::default().bg(Color::Rgb(60, 60, 80));
+
     for (idx, line) in lines.iter_mut().enumerate() {
         let line_index = top + idx;
         if line_index < start.line_index || line_index > end.line_index {
             continue;
         }
-        for span in &mut line.spans {
-            span.style = span
-                .style
-                .patch(Style::default().bg(Color::Rgb(60, 60, 60)));
-        }
+
+        // Determine column range for this line
+        let (col_start, col_end) = if start.line_index == end.line_index {
+            // Single line selection
+            (start.column, end.column)
+        } else if line_index == start.line_index {
+            // First line of multi-line selection
+            (start.column, usize::MAX)
+        } else if line_index == end.line_index {
+            // Last line of multi-line selection
+            (0, end.column)
+        } else {
+            // Middle line - select entire line
+            (0, usize::MAX)
+        };
+
+        // Apply selection to character range within the line
+        let new_spans = apply_selection_to_line(line, col_start, col_end, selection_style);
+        line.spans = new_spans;
     }
+}
+
+fn apply_selection_to_line(
+    line: &Line<'static>,
+    col_start: usize,
+    col_end: usize,
+    selection_style: Style,
+) -> Vec<Span<'static>> {
+    let mut result = Vec::new();
+    let mut current_col = 0usize;
+
+    for span in &line.spans {
+        let span_text: &str = span.content.as_ref();
+        let span_len = span_text.chars().count();
+        let span_end = current_col + span_len;
+
+        if span_end <= col_start || current_col >= col_end {
+            // Span is entirely outside selection
+            result.push(span.clone());
+        } else if current_col >= col_start && span_end <= col_end {
+            // Span is entirely within selection
+            result.push(Span::styled(
+                span.content.clone(),
+                span.style.patch(selection_style),
+            ));
+        } else {
+            // Span is partially selected - split it
+            let chars: Vec<char> = span_text.chars().collect();
+            let mut before = String::new();
+            let mut selected = String::new();
+            let mut after = String::new();
+
+            for (i, &ch) in chars.iter().enumerate() {
+                let char_col = current_col + i;
+                if char_col < col_start {
+                    before.push(ch);
+                } else if char_col < col_end {
+                    selected.push(ch);
+                } else {
+                    after.push(ch);
+                }
+            }
+
+            if !before.is_empty() {
+                result.push(Span::styled(before, span.style));
+            }
+            if !selected.is_empty() {
+                result.push(Span::styled(selected, span.style.patch(selection_style)));
+            }
+            if !after.is_empty() {
+                result.push(Span::styled(after, span.style));
+            }
+        }
+
+        current_col = span_end;
+    }
+
+    result
 }
 
 fn render_scrollbar(f: &mut Frame, area: Rect, top: usize, visible: usize, total: usize) {

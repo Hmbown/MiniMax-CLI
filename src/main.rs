@@ -14,6 +14,7 @@ mod commands;
 mod compaction;
 mod config;
 mod core;
+mod duo;
 mod hooks;
 mod llm_client;
 mod logging;

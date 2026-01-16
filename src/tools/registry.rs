@@ -12,6 +12,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::client::AnthropicClient;
+use crate::duo::SharedDuoSession;
 use crate::models::Tool;
 use crate::rlm::SharedRlmSession;
 
@@ -346,6 +347,17 @@ impl ToolRegistryBuilder {
             .with_tool(Arc::new(super::rlm::RlmQueryTool::new(
                 session, client, model,
             )))
+    }
+
+    /// Include Duo tools for dialectical autocoding.
+    #[must_use]
+    pub fn with_duo_tools(self, session: SharedDuoSession) -> Self {
+        use super::duo::{DuoAdvanceTool, DuoCoachTool, DuoInitTool, DuoPlayerTool, DuoStatusTool};
+        self.with_tool(Arc::new(DuoInitTool::new(session.clone())))
+            .with_tool(Arc::new(DuoPlayerTool::new(session.clone())))
+            .with_tool(Arc::new(DuoCoachTool::new(session.clone())))
+            .with_tool(Arc::new(DuoAdvanceTool::new(session.clone())))
+            .with_tool(Arc::new(DuoStatusTool::new(session)))
     }
 
     /// Include sub-agent management tools.

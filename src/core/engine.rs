@@ -20,12 +20,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::client::AnthropicClient;
 use crate::config::Config;
+use crate::duo::{DuoSession, SharedDuoSession, session_summary as duo_session_summary};
 use crate::mcp::McpPool;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool, Usage,
 };
 use crate::prompts;
-use crate::rlm::{RlmSession, SharedRlmSession, session_summary};
+use crate::rlm::{RlmSession, SharedRlmSession, session_summary as rlm_session_summary};
 use crate::tools::plan::PlanState;
 use crate::tools::spec::{ApprovalLevel, ToolError, ToolResult};
 use crate::tools::subagent::{
@@ -64,6 +65,8 @@ pub struct EngineConfig {
     pub max_subagents: usize,
     /// Shared RLM session state.
     pub rlm_session: SharedRlmSession,
+    /// Shared Duo session state.
+    pub duo_session: SharedDuoSession,
 }
 
 impl Default for EngineConfig {
@@ -78,6 +81,7 @@ impl Default for EngineConfig {
             max_steps: 100,
             max_subagents: 5,
             rlm_session: Arc::new(Mutex::new(RlmSession::default())),
+            duo_session: Arc::new(Mutex::new(DuoSession::new())),
         }
     }
 }
@@ -308,8 +312,12 @@ impl Engine {
         );
 
         // Set up system prompt with project context (default to agent mode)
-        let system_prompt =
-            prompts::system_prompt_for_mode_with_context(AppMode::Agent, &config.workspace, None);
+        let system_prompt = prompts::system_prompt_for_mode_with_context(
+            AppMode::Agent,
+            &config.workspace,
+            None,
+            None,
+        );
         session.system_prompt = Some(system_prompt);
 
         let subagent_manager =
@@ -545,7 +553,16 @@ impl Engine {
                 .rlm_session
                 .lock()
                 .ok()
-                .map(|session| session_summary(&session))
+                .map(|session| rlm_session_summary(&session))
+        } else {
+            None
+        };
+        let duo_summary = if mode == AppMode::Duo {
+            self.config
+                .duo_session
+                .lock()
+                .ok()
+                .map(|s| duo_session_summary(&s))
         } else {
             None
         };
@@ -553,6 +570,7 @@ impl Engine {
             mode,
             &self.config.workspace,
             rlm_summary.as_deref(),
+            duo_summary.as_deref(),
         ));
 
         // Build tool registry and tool list for the current mode
@@ -572,9 +590,12 @@ impl Engine {
                 self.session.model.clone(),
             );
         }
+        if mode == AppMode::Duo {
+            builder = builder.with_duo_tools(self.config.duo_session.clone());
+        }
 
         let tool_registry = match mode {
-            AppMode::Agent | AppMode::Yolo | AppMode::Rlm => {
+            AppMode::Agent | AppMode::Yolo | AppMode::Rlm | AppMode::Duo => {
                 let runtime = if let Some(client) = self.anthropic_client.clone() {
                     Some(SubAgentRuntime::new(
                         client,
