@@ -37,6 +37,7 @@ mod ui;
 mod utils;
 
 use crate::config::Config;
+use crate::llm_client::LlmClient;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -185,7 +186,7 @@ async fn main() -> Result<()> {
     if let Some(command) = cli.command.clone() {
         return match command {
             Commands::Doctor => {
-                run_doctor();
+                run_doctor().await;
                 Ok(())
             }
             Commands::Completions { shell } => {
@@ -321,7 +322,7 @@ fn generate_completions(shell: Shell) {
 }
 
 /// Run system diagnostics
-fn run_doctor() {
+async fn run_doctor() {
     use colored::Colorize;
 
     println!("{}", "MiniMax CLI Doctor".bold().cyan());
@@ -356,8 +357,9 @@ fn run_doctor() {
     // Check API keys
     println!();
     println!("{}", "API Keys:".bold());
-    if std::env::var("MINIMAX_API_KEY").is_ok() {
+    let has_api_key = if std::env::var("MINIMAX_API_KEY").is_ok() {
         println!("  {} MINIMAX_API_KEY is set", "✓".green());
+        true
     } else {
         let key_in_config = Config::load(None, None)
             .ok()
@@ -365,10 +367,54 @@ fn run_doctor() {
             .is_some();
         if key_in_config {
             println!("  {} MiniMax API key found in config", "✓".green());
+            true
         } else {
             println!("  {} MiniMax API key not configured", "✗".red());
             println!("    Run 'minimax' to configure interactively, or set MINIMAX_API_KEY");
+            false
         }
+    };
+
+    // API connectivity test
+    println!();
+    println!("{}", "API Connectivity:".bold());
+    if has_api_key {
+        print!("  {} Testing connection to MiniMax API...", "·".dimmed());
+        // Flush to show progress immediately
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+
+        match test_api_connectivity().await {
+            Ok(model) => {
+                println!(
+                    "\r  {} API connection successful (model: {})",
+                    "✓".green(),
+                    model
+                );
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!("\r  {} API connection failed", "✗".red());
+                // Provide helpful diagnostics based on error type
+                if error_msg.contains("401") || error_msg.contains("Unauthorized") {
+                    println!("    Invalid API key. Check your MINIMAX_API_KEY or config.toml");
+                } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
+                    println!(
+                        "    API key lacks permissions. Verify key is active at platform.minimax.io"
+                    );
+                } else if error_msg.contains("timeout") || error_msg.contains("Timeout") {
+                    println!("    Connection timed out. Check your network connection");
+                } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+                    println!("    DNS resolution failed. Check your network connection");
+                } else if error_msg.contains("connect") {
+                    println!("    Connection failed. Check firewall settings or try again");
+                } else {
+                    println!("    Error: {}", error_msg);
+                }
+            }
+        }
+    } else {
+        println!("  {} Skipped (no API key configured)", "·".dimmed());
     }
 
     // Check MCP configuration
@@ -431,6 +477,45 @@ fn run_doctor() {
 
     println!();
     println!("{}", "All checks complete!".green().bold());
+}
+
+/// Test API connectivity by making a minimal request
+async fn test_api_connectivity() -> Result<String> {
+    use crate::client::AnthropicClient;
+    use crate::models::{ContentBlock, Message, MessageRequest};
+
+    let config = Config::load(None, None)?;
+    let client = AnthropicClient::new(&config)?;
+    let model = client.model().to_string();
+
+    // Minimal request: single word prompt, 1 max token
+    let request = MessageRequest {
+        model: model.clone(),
+        messages: vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "hi".to_string(),
+                cache_control: None,
+            }],
+        }],
+        max_tokens: 1,
+        system: None,
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        stream: Some(false),
+        temperature: None,
+        top_p: None,
+    };
+
+    // Use tokio timeout to catch hanging requests
+    let timeout_duration = std::time::Duration::from_secs(15);
+    match tokio::time::timeout(timeout_duration, client.create_message(request)).await {
+        Ok(Ok(_response)) => Ok(model),
+        Ok(Err(e)) => Err(e),
+        Err(_) => anyhow::bail!("Request timeout after 15 seconds"),
+    }
 }
 
 fn rustc_version() -> String {
