@@ -652,9 +652,8 @@ fn shared_shell_manager(workspace: &PathBuf) -> SharedShellManager {
 
 use crate::command_safety::{SafetyLevel, analyze_command};
 use crate::tools::spec::{
-    ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
-    optional_bool, optional_u64, required_str,
-    SandboxPolicy as ToolSandboxPolicy,
+    ApprovalRequirement, SandboxPolicy as ToolSandboxPolicy, ToolCapability, ToolContext,
+    ToolError, ToolResult, ToolSpec, optional_bool, optional_u64, required_str,
 };
 use crate::utils::truncate_to_boundary;
 use async_trait::async_trait;
@@ -1039,7 +1038,10 @@ impl ToolSpec for ExecShellInteractTool {
     }
 
     fn capabilities(&self) -> Vec<ToolCapability> {
-        vec![ToolCapability::ExecutesCode, ToolCapability::RequiresApproval]
+        vec![
+            ToolCapability::ExecutesCode,
+            ToolCapability::RequiresApproval,
+        ]
     }
 
     fn approval_requirement(&self) -> ApprovalRequirement {
@@ -1154,9 +1156,7 @@ mod tests {
         #[cfg(windows)]
         {
             let ps_path = r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"#;
-            format!(
-                "\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}\""
-            )
+            format!("\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}\"")
         }
         #[cfg(not(windows))]
         {

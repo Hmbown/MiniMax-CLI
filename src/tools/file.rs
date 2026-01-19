@@ -186,9 +186,7 @@ impl ToolSpec for EditFileTool {
         let replace = required_str(&input, "replace")?;
 
         if search.is_empty() {
-            return Err(ToolError::invalid_input(
-                "Search string cannot be empty.",
-            ));
+            return Err(ToolError::invalid_input("Search string cannot be empty."));
         }
 
         let file_path = context.resolve_path(path_str)?;

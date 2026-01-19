@@ -12,6 +12,7 @@
 //! Configuration is done via `[[hooks.hooks]]` in config.toml.
 
 // Note: anyhow is available if needed for future error handling
+use crate::utils::truncate_to_boundary;
 #[allow(unused_imports)]
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,6 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
-use crate::utils::truncate_to_boundary;
 
 /// Events that can trigger hook execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
