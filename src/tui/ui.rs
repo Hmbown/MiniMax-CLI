@@ -39,6 +39,7 @@ use crate::session_manager::{SessionManager, create_saved_session, update_sessio
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
 use crate::tui::event_broker::EventBroker;
+use crate::tui::paste_burst::CharDecision;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
 use crate::tui::selection::TranscriptSelectionPoint;
 use crate::utils::estimate_message_chars;
@@ -504,6 +505,8 @@ async fn run_event_loop(
             continue;
         }
 
+        app.flush_paste_burst_if_due(Instant::now());
+
         terminal.draw(|f| render(f, app))?; // app is &mut
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -513,20 +516,13 @@ async fn run_event_loop(
             if let Event::Paste(text) = &evt {
                 if app.onboarding == OnboardingState::EnteringKey {
                     // Paste into API key input
-                    for c in text.chars() {
-                        if !c.is_control() {
-                            app.api_key_input.insert(app.api_key_cursor, c);
-                            app.api_key_cursor += 1;
-                        }
-                    }
+                    app.insert_api_key_str(text);
                 } else {
                     // Paste into main input
-                    for c in text.chars() {
-                        if c != '\n' && c != '\r' {
-                            app.input.insert(app.cursor_position, c);
-                            app.cursor_position += 1;
-                        }
+                    if let Some(pending) = app.paste_burst.flush_before_modified_input() {
+                        app.insert_str(&pending);
                     }
+                    app.insert_paste_text(text);
                 }
                 continue;
             }
@@ -577,21 +573,17 @@ async fn run_event_loop(
                         OnboardingState::None => {}
                     },
                     KeyCode::Backspace if app.onboarding == OnboardingState::EnteringKey => {
-                        if app.api_key_cursor > 0 {
-                            app.api_key_cursor -= 1;
-                            app.api_key_input.remove(app.api_key_cursor);
-                        }
+                        app.delete_api_key_char();
                     }
                     KeyCode::Char(c) if app.onboarding == OnboardingState::EnteringKey => {
-                        app.api_key_input.insert(app.api_key_cursor, c);
-                        app.api_key_cursor += 1;
+                        app.insert_api_key_char(c);
                     }
                     KeyCode::Char('v')
                         if key.modifiers.contains(KeyModifiers::CONTROL)
                             && app.onboarding == OnboardingState::EnteringKey =>
                     {
                         // Ctrl+V handled by bracketed paste above
-                        app.paste_from_clipboard();
+                        app.paste_api_key_from_clipboard();
                     }
                     _ => {}
                 }
@@ -611,6 +603,26 @@ async fn run_event_loop(
                 let events = app.view_stack.handle_key(key);
                 handle_view_events(app, &engine_handle, events).await;
                 continue;
+            }
+
+            let now = Instant::now();
+            app.flush_paste_burst_if_due(now);
+
+            let has_ctrl_or_alt = key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::ALT);
+            let is_plain_char = matches!(key.code, KeyCode::Char(_)) && !has_ctrl_or_alt;
+            let is_enter = matches!(key.code, KeyCode::Enter);
+
+            if !is_plain_char && !is_enter {
+                if let Some(pending) = app.paste_burst.flush_before_modified_input() {
+                    app.insert_str(&pending);
+                }
+            }
+
+            if is_plain_char || is_enter {
+                if handle_paste_burst_key(app, &key, now) {
+                    continue;
+                }
             }
 
             // Global keybindings
@@ -830,8 +842,102 @@ async fn run_event_loop(
                 }
                 _ => {}
             }
+
+            if !is_plain_char && !is_enter {
+                app.paste_burst.clear_window_after_non_char();
+            }
         }
     }
+}
+
+fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bool {
+    let has_ctrl_or_alt =
+        key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT);
+
+    match key.code {
+        KeyCode::Enter => {
+            if !in_command_context(app) && app.paste_burst.append_newline_if_active(now) {
+                return true;
+            }
+            if !in_command_context(app)
+                && app.paste_burst.newline_should_insert_instead_of_submit(now)
+            {
+                app.insert_char('\n');
+                app.paste_burst.extend_window(now);
+                return true;
+            }
+        }
+        KeyCode::Char(c) if !has_ctrl_or_alt => {
+            if !c.is_ascii() {
+                if let Some(pending) = app.paste_burst.flush_before_modified_input() {
+                    app.insert_str(&pending);
+                }
+                if app.paste_burst.try_append_char_if_active(c, now) {
+                    return true;
+                }
+                if let Some(decision) = app.paste_burst.on_plain_char_no_hold(now) {
+                    return handle_paste_burst_decision(app, decision, c, now);
+                }
+                app.insert_char(c);
+                return true;
+            }
+
+            let decision = app.paste_burst.on_plain_char(c, now);
+            return handle_paste_burst_decision(app, decision, c, now);
+        }
+        _ => {}
+    }
+
+    false
+}
+
+fn handle_paste_burst_decision(
+    app: &mut App,
+    decision: CharDecision,
+    c: char,
+    now: Instant,
+) -> bool {
+    match decision {
+        CharDecision::RetainFirstChar => true,
+        CharDecision::BeginBufferFromPending | CharDecision::BufferAppend => {
+            app.paste_burst.append_char_to_buffer(c, now);
+            true
+        }
+        CharDecision::BeginBuffer { retro_chars } => {
+            if apply_paste_burst_retro_capture(app, retro_chars as usize, c, now) {
+                return true;
+            }
+            app.insert_char(c);
+            true
+        }
+    }
+}
+
+fn apply_paste_burst_retro_capture(
+    app: &mut App,
+    retro_chars: usize,
+    c: char,
+    now: Instant,
+) -> bool {
+    let cursor_byte = app.cursor_byte_index();
+    let before = &app.input[..cursor_byte];
+    let Some(grab) = app
+        .paste_burst
+        .decide_begin_buffer(now, before, retro_chars)
+    else {
+        return false;
+    };
+    if !grab.grabbed.is_empty() {
+        app.input.replace_range(grab.start_byte..cursor_byte, "");
+        let removed = grab.grabbed.chars().count();
+        app.cursor_position = app.cursor_position.saturating_sub(removed);
+    }
+    app.paste_burst.append_char_to_buffer(c, now);
+    true
+}
+
+fn in_command_context(app: &App) -> bool {
+    app.input.starts_with('/')
 }
 
 fn build_queued_message(app: &mut App, input: String) -> QueuedMessage {

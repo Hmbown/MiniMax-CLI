@@ -7,6 +7,7 @@ pub mod approval;
 pub mod clipboard;
 pub mod event_broker;
 pub mod history;
+pub mod paste_burst;
 pub mod scrolling;
 pub mod selection;
 pub mod streaming;

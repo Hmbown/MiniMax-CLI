@@ -69,7 +69,8 @@ fn edit_queue(app: &mut App, index: Option<&str>) -> CommandResult {
     };
 
     app.input = message.display.clone();
-    app.cursor_position = app.input.len();
+    app.cursor_position = app.input.chars().count();
+    app.paste_burst.clear_after_explicit_paste();
     app.queued_draft = Some(message);
     app.status_message = Some(format!("Editing queued message {}", index + 1));
 

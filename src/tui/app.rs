@@ -18,6 +18,7 @@ use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tui::approval::ApprovalMode;
 use crate::tui::clipboard::{ClipboardContent, ClipboardHandler};
 use crate::tui::history::HistoryCell;
+use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptScroll};
 use crate::tui::selection::TranscriptSelection;
 use crate::tui::transcript::TranscriptViewCache;
@@ -44,6 +45,43 @@ pub enum AppMode {
     Plan,
     Rlm,
     Duo,
+}
+
+fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn byte_index_at_char(text: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| text.len())
+}
+
+fn remove_char_at(text: &mut String, char_index: usize) -> bool {
+    let start = byte_index_at_char(text, char_index);
+    if start >= text.len() {
+        return false;
+    }
+    let ch = text[start..].chars().next().unwrap();
+    let end = start + ch.len_utf8();
+    text.replace_range(start..end, "");
+    true
+}
+
+fn normalize_paste_text(text: &str) -> String {
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "")
+    } else {
+        text.to_string()
+    }
+}
+
+fn sanitize_api_key_text(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
 }
 
 impl AppMode {
@@ -106,6 +144,7 @@ pub struct App {
     pub mode: AppMode,
     pub input: String,
     pub cursor_position: usize,
+    pub paste_burst: PasteBurst,
     pub history: Vec<HistoryCell>,
     pub history_version: u64,
     pub api_messages: Vec<Message>,
@@ -324,6 +363,7 @@ impl App {
             mode: initial_mode,
             input: String::new(),
             cursor_position: 0,
+            paste_burst: PasteBurst::default(),
             history,
             history_version: history_len,
             api_messages: Vec::new(),
@@ -492,29 +532,94 @@ impl App {
         self.history_version = self.history_version.wrapping_add(1);
     }
 
+    pub fn cursor_byte_index(&self) -> usize {
+        byte_index_at_char(&self.input, self.cursor_position)
+    }
+
+    pub fn insert_str(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let cursor = self.cursor_position.min(char_count(&self.input));
+        let byte_index = byte_index_at_char(&self.input, cursor);
+        self.input.insert_str(byte_index, text);
+        self.cursor_position = cursor + char_count(text);
+    }
+
+    pub fn insert_paste_text(&mut self, text: &str) {
+        let normalized = normalize_paste_text(text);
+        if !normalized.is_empty() {
+            self.insert_str(&normalized);
+        }
+        self.paste_burst.clear_after_explicit_paste();
+    }
+
+    pub fn flush_paste_burst_if_due(&mut self, now: Instant) -> bool {
+        match self.paste_burst.flush_if_due(now) {
+            FlushResult::Paste(text) => {
+                self.insert_str(&text);
+                true
+            }
+            FlushResult::Typed(ch) => {
+                self.insert_char(ch);
+                true
+            }
+            FlushResult::None => false,
+        }
+    }
+
+    pub fn insert_api_key_char(&mut self, c: char) {
+        let cursor = self.api_key_cursor.min(char_count(&self.api_key_input));
+        let byte_index = byte_index_at_char(&self.api_key_input, cursor);
+        self.api_key_input.insert(byte_index, c);
+        self.api_key_cursor = cursor + 1;
+    }
+
+    pub fn insert_api_key_str(&mut self, text: &str) {
+        let sanitized = sanitize_api_key_text(text);
+        if sanitized.is_empty() {
+            return;
+        }
+        let cursor = self.api_key_cursor.min(char_count(&self.api_key_input));
+        let byte_index = byte_index_at_char(&self.api_key_input, cursor);
+        self.api_key_input.insert_str(byte_index, &sanitized);
+        self.api_key_cursor = cursor + char_count(&sanitized);
+    }
+
+    pub fn delete_api_key_char(&mut self) {
+        if self.api_key_cursor == 0 {
+            return;
+        }
+        let target = self.api_key_cursor.saturating_sub(1);
+        if remove_char_at(&mut self.api_key_input, target) {
+            self.api_key_cursor = target;
+        }
+    }
+
     /// Paste from clipboard into input
     pub fn paste_from_clipboard(&mut self) {
         if let Some(content) = self.clipboard.read(self.workspace.as_path()) {
+            if let Some(pending) = self.paste_burst.flush_before_modified_input() {
+                self.insert_str(&pending);
+            }
             match content {
                 ClipboardContent::Text(text) => {
-                    // Insert text at cursor position
-                    for c in text.chars() {
-                        if c != '\n' && c != '\r' {
-                            self.input.insert(self.cursor_position, c);
-                            self.cursor_position += 1;
-                        }
-                    }
+                    self.insert_paste_text(&text);
                 }
                 ClipboardContent::Image { path, description } => {
                     // Insert image path reference
                     let reference = format!("[Image: {} at {}]", description, path.display());
-                    for c in reference.chars() {
-                        self.input.insert(self.cursor_position, c);
-                        self.cursor_position += 1;
-                    }
+                    self.insert_str(&reference);
+                    self.paste_burst.clear_after_explicit_paste();
                     self.status_message = Some(format!("Pasted image: {}", path.display()));
                 }
             }
+        }
+    }
+
+    pub fn paste_api_key_from_clipboard(&mut self) {
+        if let Some(ClipboardContent::Text(text)) = self.clipboard.read(self.workspace.as_path()) {
+            self.insert_api_key_str(&text);
         }
     }
 
@@ -534,20 +639,30 @@ impl App {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        let cursor = self.cursor_position.min(char_count(&self.input));
+        let byte_index = byte_index_at_char(&self.input, cursor);
+        self.input.insert(byte_index, c);
+        self.cursor_position = cursor + 1;
     }
 
     pub fn delete_char(&mut self) {
-        if self.cursor_position > 0 {
-            self.cursor_position -= 1;
-            self.input.remove(self.cursor_position);
+        if self.cursor_position == 0 {
+            return;
+        }
+        let target = self.cursor_position.saturating_sub(1);
+        if remove_char_at(&mut self.input, target) {
+            self.cursor_position = target;
         }
     }
 
     pub fn delete_char_forward(&mut self) {
-        if self.cursor_position < self.input.len() {
-            self.input.remove(self.cursor_position);
+        if self.cursor_position >= char_count(&self.input) {
+            return;
+        }
+        let target = self.cursor_position;
+        let removed = remove_char_at(&mut self.input, target);
+        if !removed {
+            self.cursor_position = char_count(&self.input);
         }
     }
 
@@ -556,7 +671,7 @@ impl App {
     }
 
     pub fn move_cursor_right(&mut self) {
-        if self.cursor_position < self.input.len() {
+        if self.cursor_position < char_count(&self.input) {
             self.cursor_position += 1;
         }
     }
@@ -566,16 +681,18 @@ impl App {
     }
 
     pub fn move_cursor_end(&mut self) {
-        self.cursor_position = self.input.len();
+        self.cursor_position = char_count(&self.input);
     }
 
     pub fn clear_input(&mut self) {
         self.input.clear();
         self.cursor_position = 0;
+        self.paste_burst.clear_after_explicit_paste();
     }
 
     pub fn submit_input(&mut self) -> Option<String> {
         if self.input.trim().is_empty() {
+            self.paste_burst.clear_after_explicit_paste();
             return None;
         }
         let input = self.input.clone();
@@ -631,7 +748,8 @@ impl App {
         };
         self.history_index = Some(new_index);
         self.input = self.input_history[new_index].clone();
-        self.cursor_position = self.input.len();
+        self.cursor_position = char_count(&self.input);
+        self.paste_burst.clear_after_explicit_paste();
     }
 
     pub fn history_down(&mut self) {
@@ -644,7 +762,8 @@ impl App {
                 if i + 1 < self.input_history.len() {
                     self.history_index = Some(i + 1);
                     self.input = self.input_history[i + 1].clone();
-                    self.cursor_position = self.input.len();
+                    self.cursor_position = char_count(&self.input);
+                    self.paste_burst.clear_after_explicit_paste();
                 } else {
                     self.history_index = None;
                     self.clear_input();

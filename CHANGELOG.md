@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-01-19
+
+### Added
+- Paste-burst detection to keep multi-line pastes from submitting mid-stream
+
+### Fixed
+- Preserve newlines in pasted text (clipboard + bracketed paste)
+- UTF-8-safe cursor edits for TUI input and API key entry
+- Respect configured default model for Anthropic-compatible clients
+
 ## [0.2.0] - 2026-01-19
 
 ### Added
@@ -81,7 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.7...v0.1.8
