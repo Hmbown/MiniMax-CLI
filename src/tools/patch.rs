@@ -251,8 +251,6 @@ fn patch_indicates_no_newline(patch: &str) -> bool {
             last_line_kind = Some('+');
         } else if line.starts_with('-') {
             last_line_kind = Some('-');
-        } else if line.starts_with(' ') || line.is_empty() {
-            last_line_kind = Some(' ');
         } else {
             last_line_kind = Some(' ');
         }

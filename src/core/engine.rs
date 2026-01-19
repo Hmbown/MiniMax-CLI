@@ -1006,34 +1006,32 @@ impl Engine {
                             }
                             Some(ContentBlockKind::ToolUse) | None => {}
                         }
-                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse)) {
-                            if let Some(index) = current_tool_index.take()
-                                && let Some(tool_state) = tool_uses.get_mut(index)
-                            {
-                                crate::logging::info(format!(
-                                    "Tool '{}' block stop. Buffer: '{}', Current input: {:?}",
-                                    tool_state.name, tool_state.input_buffer, tool_state.input
-                                ));
-                                if !tool_state.input_buffer.trim().is_empty() {
-                                    if let Some(value) = parse_tool_input(&tool_state.input_buffer)
-                                    {
-                                        tool_state.input = value;
-                                        crate::logging::info(format!(
-                                            "Tool '{}' final input: {:?}",
-                                            tool_state.name, tool_state.input
-                                        ));
-                                    } else {
-                                        crate::logging::warn(format!(
-                                            "Tool '{}' failed to parse final input buffer: '{}'",
-                                            tool_state.name, tool_state.input_buffer
-                                        ));
-                                    }
-                                } else {
-                                    crate::logging::warn(format!(
-                                        "Tool '{}' input buffer is empty, using initial input: {:?}",
+                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse))
+                            && let Some(index) = current_tool_index.take()
+                            && let Some(tool_state) = tool_uses.get_mut(index)
+                        {
+                            crate::logging::info(format!(
+                                "Tool '{}' block stop. Buffer: '{}', Current input: {:?}",
+                                tool_state.name, tool_state.input_buffer, tool_state.input
+                            ));
+                            if !tool_state.input_buffer.trim().is_empty() {
+                                if let Some(value) = parse_tool_input(&tool_state.input_buffer) {
+                                    tool_state.input = value;
+                                    crate::logging::info(format!(
+                                        "Tool '{}' final input: {:?}",
                                         tool_state.name, tool_state.input
                                     ));
+                                } else {
+                                    crate::logging::warn(format!(
+                                        "Tool '{}' failed to parse final input buffer: '{}'",
+                                        tool_state.name, tool_state.input_buffer
+                                    ));
                                 }
+                            } else {
+                                crate::logging::warn(format!(
+                                    "Tool '{}' input buffer is empty, using initial input: {:?}",
+                                    tool_state.name, tool_state.input
+                                ));
                             }
                         }
                     }

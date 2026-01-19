@@ -632,13 +632,13 @@ pub fn new_shared_shell_manager_with_sandbox(
     Arc::new(Mutex::new(ShellManager::with_sandbox(workspace, policy)))
 }
 
-fn shell_manager_key(workspace: &PathBuf) -> PathBuf {
+fn shell_manager_key(workspace: &std::path::Path) -> PathBuf {
     workspace
         .canonicalize()
-        .unwrap_or_else(|_| workspace.clone())
+        .unwrap_or_else(|_| workspace.to_path_buf())
 }
 
-fn shared_shell_manager(workspace: &PathBuf) -> SharedShellManager {
+fn shared_shell_manager(workspace: &std::path::Path) -> SharedShellManager {
     let key = shell_manager_key(workspace);
     let managers = SHELL_MANAGERS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut managers = managers.lock().expect("lock shell manager registry");
@@ -1337,7 +1337,7 @@ mod tests {
                 .as_ref()
                 .and_then(|meta| meta.get("status"))
                 .and_then(|value| value.as_str())
-                .map_or(false, |status| status == "Killed")
+                == Some("Killed")
         );
     }
 }
