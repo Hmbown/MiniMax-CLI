@@ -23,6 +23,12 @@ SHELL EXECUTION:
   - command: The command to execute
   - timeout_ms: Timeout in milliseconds (default: 120000, max: 600000)
   - background: Set true to run in background, returns task_id
+- exec_shell_wait: Wait for a background task and return output
+  - task_id: The background task id
+  - block: Whether to wait for completion (default: true)
+  - timeout_ms: Timeout in milliseconds (default: 120000, max: 600000)
+- exec_shell_kill: Terminate a background task (task_id)
+- exec_shell_interact: Run a command interactively with terminal IO
 
 TASK MANAGEMENT:
 - todo_write: Write or update the todo list
@@ -52,4 +58,5 @@ Generated files are saved to the workspace directory.
 
 BACKGROUND EXECUTION:
 For long-running commands (build, test, server), use exec_shell with background: true.
-This returns a task_id immediately in the tool output.
+This returns a task_id immediately in the tool output. Use exec_shell_wait to
+retrieve output or exec_shell_kill to stop the task.

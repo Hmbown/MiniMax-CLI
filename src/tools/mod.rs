@@ -47,7 +47,7 @@ pub use patch::ApplyPatchTool;
 pub use file::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 
 // Re-export shell types
-pub use shell::ExecShellTool;
+pub use shell::{ExecShellInteractTool, ExecShellKillTool, ExecShellTool, ExecShellWaitTool};
 
 // Re-export subagent types
 pub use subagent::SubAgent;

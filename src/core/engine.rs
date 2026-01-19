@@ -921,6 +921,11 @@ impl Engine {
                                 .await;
                         }
                         ContentBlockStart::ToolUse { id, name, input } => {
+                            crate::logging::info(format!(
+                                "Tool '{}' block start. Initial input: {:?}",
+                                name,
+                                input
+                            ));
                             current_block_kind = Some(ContentBlockKind::ToolUse);
                             current_tool_index = Some(tool_uses.len());
                             let _ = self
@@ -971,8 +976,19 @@ impl Engine {
                                 && let Some(tool_state) = tool_uses.get_mut(index)
                             {
                                 tool_state.input_buffer.push_str(&partial_json);
+                                crate::logging::info(format!(
+                                    "Tool '{}' input delta: {} (buffer now: {})",
+                                    tool_state.name,
+                                    partial_json,
+                                    tool_state.input_buffer
+                                ));
                                 if let Some(value) = parse_tool_input(&tool_state.input_buffer) {
-                                    tool_state.input = value;
+                                    tool_state.input = value.clone();
+                                    crate::logging::info(format!(
+                                        "Tool '{}' input parsed: {:?}",
+                                        tool_state.name,
+                                        value
+                                    ));
                                 }
                             }
                         }
@@ -994,13 +1010,41 @@ impl Engine {
                             }
                             Some(ContentBlockKind::ToolUse) | None => {}
                         }
-                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse))
-                            && let Some(index) = current_tool_index.take()
-                            && let Some(tool_state) = tool_uses.get_mut(index)
-                            && !tool_state.input_buffer.trim().is_empty()
-                            && let Some(value) = parse_tool_input(&tool_state.input_buffer)
-                        {
-                            tool_state.input = value;
+                        if matches!(stopped_kind, Some(ContentBlockKind::ToolUse)) {
+                            if let Some(index) = current_tool_index.take()
+                                && let Some(tool_state) = tool_uses.get_mut(index)
+                            {
+                                crate::logging::info(format!(
+                                    "Tool '{}' block stop. Buffer: '{}', Current input: {:?}",
+                                    tool_state.name,
+                                    tool_state.input_buffer,
+                                    tool_state.input
+                                ));
+                                if !tool_state.input_buffer.trim().is_empty() {
+                                    if let Some(value) =
+                                        parse_tool_input(&tool_state.input_buffer)
+                                    {
+                                        tool_state.input = value;
+                                        crate::logging::info(format!(
+                                            "Tool '{}' final input: {:?}",
+                                            tool_state.name,
+                                            tool_state.input
+                                        ));
+                                    } else {
+                                        crate::logging::warn(format!(
+                                            "Tool '{}' failed to parse final input buffer: '{}'",
+                                            tool_state.name,
+                                            tool_state.input_buffer
+                                        ));
+                                    }
+                                } else {
+                                    crate::logging::warn(format!(
+                                        "Tool '{}' input buffer is empty, using initial input: {:?}",
+                                        tool_state.name,
+                                        tool_state.input
+                                    ));
+                                }
+                            }
                         }
                     }
                     StreamEvent::MessageDelta {
@@ -1102,6 +1146,11 @@ impl Engine {
                 let tool_id = tool.id.clone();
                 let tool_name = tool.name.clone();
                 let tool_input = tool.input.clone();
+                crate::logging::info(format!(
+                    "Executing tool '{}' with input: {:?}",
+                    tool_name,
+                    tool_input
+                ));
                 let interactive = tool_name == "exec_shell"
                     && tool_input
                         .get("interactive")

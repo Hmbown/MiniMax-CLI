@@ -263,8 +263,16 @@ impl ToolRegistryBuilder {
     /// Include shell execution tool.
     #[must_use]
     pub fn with_shell_tools(self) -> Self {
-        use super::shell::ExecShellTool;
+        use super::shell::{
+            ExecShellInteractTool, ExecShellKillTool, ExecShellTool, ExecShellWaitTool,
+        };
         self.with_tool(Arc::new(ExecShellTool))
+            .with_tool(Arc::new(ExecShellWaitTool::new("exec_shell_wait")))
+            .with_tool(Arc::new(ExecShellWaitTool::new("exec_wait")))
+            .with_tool(Arc::new(ExecShellKillTool::new("exec_shell_kill")))
+            .with_tool(Arc::new(ExecShellKillTool::new("exec_kill")))
+            .with_tool(Arc::new(ExecShellInteractTool::new("exec_shell_interact")))
+            .with_tool(Arc::new(ExecShellInteractTool::new("exec_interact")))
     }
 
     /// Include search tools (`grep_files`).

@@ -23,6 +23,8 @@ EDITING (ask first):
 - edit_file: Search and replace text in a file
 - apply_patch: Apply a unified diff patch
 - exec_shell: Run shell commands (if enabled)
+- exec_shell_wait: Wait for background shell tasks
+- exec_shell_kill: Terminate background shell tasks
 
 MULTIMEDIA GENERATION (ask first):
 - generate_image: Create images from text prompts

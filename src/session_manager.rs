@@ -9,6 +9,7 @@
 #![allow(dead_code)] // Public API - session persistence functions for future TUI integration
 
 use crate::models::{ContentBlock, Message, SystemPrompt};
+use crate::utils::truncate_to_boundary;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -275,7 +276,8 @@ fn truncate_title(s: &str, max_len: usize) -> String {
     if first_line.len() <= max_len {
         first_line.to_string()
     } else {
-        format!("{}...", &first_line[..max_len - 3])
+        let prefix = truncate_to_boundary(first_line, max_len.saturating_sub(3));
+        format!("{prefix}...")
     }
 }
 

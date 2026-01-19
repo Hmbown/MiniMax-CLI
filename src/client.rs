@@ -405,10 +405,15 @@ fn parse_sse_stream(
                         if data == "[DONE]" {
                             return;
                         }
+                        // Log raw SSE data for debugging
+                        if data.contains("tool_use") || data.contains("input_json") {
+                            logging::info(format!("SSE tool event: {}", data));
+                        }
                         match serde_json::from_str::<StreamEvent>(data) {
                             Ok(event) => yield event,
                             Err(err) => {
                                 logging::warn(format!("Failed to parse SSE event: {err}"));
+                                logging::warn(format!("Raw SSE data: {data}"));
                             }
                         }
                     }

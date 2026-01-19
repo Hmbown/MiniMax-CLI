@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
@@ -29,6 +29,8 @@ use crate::sandbox::{
 
 /// Maximum output size before truncation (30KB like Claude Code)
 const MAX_OUTPUT_SIZE: usize = 30_000;
+
+static SHELL_MANAGERS: OnceLock<Mutex<HashMap<PathBuf, SharedShellManager>>> = OnceLock::new();
 
 /// Status of a shell process
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -604,7 +606,7 @@ fn truncate_output(output: &str) -> String {
     if output.len() <= MAX_OUTPUT_SIZE {
         output.to_string()
     } else {
-        let truncated = &output[..MAX_OUTPUT_SIZE];
+        let truncated = truncate_to_boundary(output, MAX_OUTPUT_SIZE);
         format!(
             "{}...\n\n[Output truncated at {} characters. {} characters omitted.]",
             truncated,
@@ -630,15 +632,80 @@ pub fn new_shared_shell_manager_with_sandbox(
     Arc::new(Mutex::new(ShellManager::with_sandbox(workspace, policy)))
 }
 
+fn shell_manager_key(workspace: &PathBuf) -> PathBuf {
+    workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.clone())
+}
+
+fn shared_shell_manager(workspace: &PathBuf) -> SharedShellManager {
+    let key = shell_manager_key(workspace);
+    let managers = SHELL_MANAGERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut managers = managers.lock().expect("lock shell manager registry");
+    managers
+        .entry(key.clone())
+        .or_insert_with(|| new_shared_shell_manager(key))
+        .clone()
+}
+
 // === ToolSpec Implementations ===
 
 use crate::command_safety::{SafetyLevel, analyze_command};
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_u64, required_str,
+    SandboxPolicy as ToolSandboxPolicy,
 };
+use crate::utils::truncate_to_boundary;
 use async_trait::async_trait;
 use serde_json::json;
+
+fn policy_override_from_context(context: &ToolContext) -> Option<ExecutionSandboxPolicy> {
+    match &context.sandbox_policy {
+        ToolSandboxPolicy::None => None,
+        ToolSandboxPolicy::Standard {
+            writable_roots,
+            allow_network,
+        } => Some(ExecutionSandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_roots.clone(),
+            network_access: *allow_network,
+            exclude_tmpdir: false,
+            exclude_slash_tmp: false,
+        }),
+    }
+}
+
+fn format_shell_result(result: &ShellResult, interactive: bool, wait_mode: bool) -> (String, bool) {
+    let output = if interactive {
+        format!(
+            "Interactive command completed (exit code: {:?})",
+            result.exit_code
+        )
+    } else if result.status == ShellStatus::Completed {
+        if result.stdout.is_empty() && result.stderr.is_empty() {
+            "(no output)".to_string()
+        } else if result.stderr.is_empty() {
+            result.stdout.clone()
+        } else {
+            format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
+        }
+    } else if result.status == ShellStatus::Running {
+        let task_id_str = result.task_id.clone().unwrap_or_default();
+        if wait_mode {
+            format!("Background task still running: {task_id_str}")
+        } else {
+            format!("Background task started: {task_id_str}")
+        }
+    } else {
+        format!(
+            "Command failed (exit code: {:?})\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+            result.exit_code, result.stdout, result.stderr
+        )
+    };
+
+    let success = result.status == ShellStatus::Completed || result.status == ShellStatus::Running;
+    (output, success)
+}
 
 /// Tool for executing shell commands.
 pub struct ExecShellTool;
@@ -734,49 +801,35 @@ impl ToolSpec for ExecShellTool {
             }
         }
 
-        // Create a shell manager for this execution
-        let mut manager = ShellManager::new(context.workspace.clone());
-
-        let result = if interactive {
-            manager.execute_interactive(command, None, timeout_ms)
+        let policy_override = policy_override_from_context(context);
+        let result = if background {
+            let manager = shared_shell_manager(&context.workspace);
+            let mut manager = manager
+                .lock()
+                .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
+            manager.execute_with_policy(command, None, timeout_ms, true, policy_override)
         } else {
-            manager.execute(command, None, timeout_ms, background)
+            let mut manager = ShellManager::new(context.workspace.clone());
+            if interactive {
+                manager.execute_interactive_with_policy(command, None, timeout_ms, policy_override)
+            } else {
+                manager.execute_with_policy(command, None, timeout_ms, false, policy_override)
+            }
         };
 
         match result {
             Ok(result) => {
-                let task_id_str = result.task_id.clone().unwrap_or_default();
-                let output = if interactive {
-                    format!(
-                        "Interactive command completed (exit code: {:?})",
-                        result.exit_code
-                    )
-                } else if result.status == ShellStatus::Completed {
-                    if result.stdout.is_empty() && result.stderr.is_empty() {
-                        "(no output)".to_string()
-                    } else if result.stderr.is_empty() {
-                        result.stdout.clone()
-                    } else {
-                        format!("{}\n\nSTDERR:\n{}", result.stdout, result.stderr)
-                    }
-                } else if result.status == ShellStatus::Running {
-                    format!("Background task started: {task_id_str}")
-                } else {
-                    format!(
-                        "Command failed (exit code: {:?})\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
-                        result.exit_code, result.stdout, result.stderr
-                    )
-                };
+                let (output, success) = format_shell_result(&result, interactive, false);
 
                 Ok(ToolResult {
                     content: output,
-                    success: result.status == ShellStatus::Completed
-                        || result.status == ShellStatus::Running,
+                    success,
                     metadata: Some(json!({
                         "exit_code": result.exit_code,
                         "status": format!("{:?}", result.status),
                         "duration_ms": result.duration_ms,
                         "sandboxed": result.sandboxed,
+                        "sandbox_denied": result.sandbox_denied,
                         "task_id": result.task_id,
                         "safety_level": format!("{:?}", safety.level),
                         "interactive": interactive,
@@ -785,6 +838,225 @@ impl ToolSpec for ExecShellTool {
             }
             Err(e) => Ok(ToolResult::error(format!("Shell execution failed: {e}"))),
         }
+    }
+}
+
+/// Tool for waiting on background shell commands.
+pub struct ExecShellWaitTool {
+    name: &'static str,
+}
+
+impl ExecShellWaitTool {
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ExecShellWaitTool {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "Wait for a background exec_shell task and return its output."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Background task id from exec_shell"
+                },
+                "block": {
+                    "type": "boolean",
+                    "description": "Whether to wait for completion (default: true)"
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Wait timeout in milliseconds (default: 120000, max: 600000)"
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly]
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let task_id = required_str(&input, "task_id")?;
+        let block = optional_bool(&input, "block", true);
+        let timeout_ms = optional_u64(&input, "timeout_ms", 120_000).min(600_000);
+
+        let manager = shared_shell_manager(&context.workspace);
+        let mut manager = manager
+            .lock()
+            .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
+        let result = manager
+            .get_output(task_id, block, timeout_ms)
+            .map_err(|e| ToolError::execution_failed(format!("Shell wait failed: {e}")))?;
+
+        let (output, success) = format_shell_result(&result, false, true);
+        Ok(ToolResult {
+            content: output,
+            success,
+            metadata: Some(json!({
+                "exit_code": result.exit_code,
+                "status": format!("{:?}", result.status),
+                "duration_ms": result.duration_ms,
+                "sandboxed": result.sandboxed,
+                "sandbox_denied": result.sandbox_denied,
+                "task_id": result.task_id,
+            })),
+        })
+    }
+}
+
+/// Tool for killing a background shell command.
+pub struct ExecShellKillTool {
+    name: &'static str,
+}
+
+impl ExecShellKillTool {
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ExecShellKillTool {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "Terminate a background exec_shell task."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Background task id from exec_shell"
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::RequiresApproval]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let task_id = required_str(&input, "task_id")?;
+
+        let manager = shared_shell_manager(&context.workspace);
+        let mut manager = manager
+            .lock()
+            .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
+        let result = manager
+            .kill(task_id)
+            .map_err(|e| ToolError::execution_failed(format!("Shell kill failed: {e}")))?;
+
+        let (output, success) = format_shell_result(&result, false, true);
+        Ok(ToolResult {
+            content: output,
+            success,
+            metadata: Some(json!({
+                "exit_code": result.exit_code,
+                "status": format!("{:?}", result.status),
+                "duration_ms": result.duration_ms,
+                "sandboxed": result.sandboxed,
+                "sandbox_denied": result.sandbox_denied,
+                "task_id": result.task_id,
+            })),
+        })
+    }
+}
+
+/// Tool for running a command interactively in the terminal.
+pub struct ExecShellInteractTool {
+    name: &'static str,
+}
+
+impl ExecShellInteractTool {
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ExecShellInteractTool {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "Execute a shell command interactively (inherits terminal IO)."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute"
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Timeout in milliseconds (default: 120000, max: 600000)"
+                }
+            },
+            "required": ["command"]
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ExecutesCode, ToolCapability::RequiresApproval]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let mut input_obj = input.as_object().cloned().unwrap_or_default();
+        input_obj.insert("interactive".to_string(), serde_json::Value::Bool(true));
+        input_obj.insert("background".to_string(), serde_json::Value::Bool(false));
+        ExecShellTool
+            .execute(serde_json::Value::Object(input_obj), context)
+            .await
     }
 }
 
@@ -856,6 +1128,7 @@ impl ToolSpec for NoteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn echo_command(message: &str) -> String {
@@ -869,6 +1142,20 @@ mod tests {
             let ps_path = r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"#;
             format!(
                 "\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}\" || ping 127.0.0.1 -n {ping_count} > NUL"
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            format!("sleep {seconds}")
+        }
+    }
+
+    fn safe_sleep_command(seconds: u64) -> String {
+        #[cfg(windows)]
+        {
+            let ps_path = r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"#;
+            format!(
+                "\"{ps_path}\" -NoProfile -Command \"Start-Sleep -Seconds {seconds}\""
             )
         }
         #[cfg(not(windows))]
@@ -968,5 +1255,89 @@ mod tests {
 
         assert!(truncated.len() < long_output.len());
         assert!(truncated.contains("truncated"));
+    }
+
+    #[tokio::test]
+    async fn test_exec_shell_wait_tool() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let exec = ExecShellTool;
+        let wait_tool = ExecShellWaitTool::new("exec_shell_wait");
+        let result = exec
+            .execute(
+                json!({
+                    "command": echo_command("done"),
+                    "timeout_ms": 5000,
+                    "background": true
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        let task_id = result
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("task_id"))
+            .and_then(|value| value.as_str())
+            .expect("task_id");
+
+        let waited = wait_tool
+            .execute(
+                json!({
+                    "task_id": task_id,
+                    "block": true,
+                    "timeout_ms": 5000
+                }),
+                &ctx,
+            )
+            .await
+            .expect("wait");
+
+        assert!(waited.success);
+        assert!(waited.content.contains("done"));
+    }
+
+    #[tokio::test]
+    async fn test_exec_shell_kill_tool() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let exec = ExecShellTool;
+        let kill_tool = ExecShellKillTool::new("exec_shell_kill");
+        let result = exec
+            .execute(
+                json!({
+                    "command": safe_sleep_command(60),
+                    "timeout_ms": 5000,
+                    "background": true
+                }),
+                &ctx,
+            )
+            .await
+            .expect("execute");
+
+        let task_id = result
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get("task_id"))
+            .and_then(|value| value.as_str())
+            .expect("task_id");
+
+        let killed = kill_tool
+            .execute(json!({ "task_id": task_id }), &ctx)
+            .await
+            .expect("kill");
+
+        assert!(!killed.success);
+        assert!(
+            killed
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("status"))
+                .and_then(|value| value.as_str())
+                .map_or(false, |status| status == "Killed")
+        );
     }
 }

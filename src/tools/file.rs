@@ -185,6 +185,12 @@ impl ToolSpec for EditFileTool {
         let search = required_str(&input, "search")?;
         let replace = required_str(&input, "replace")?;
 
+        if search.is_empty() {
+            return Err(ToolError::invalid_input(
+                "Search string cannot be empty.",
+            ));
+        }
+
         let file_path = context.resolve_path(path_str)?;
 
         let contents = fs::read_to_string(&file_path).map_err(|e| {
@@ -419,6 +425,27 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_empty_search_rejected() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        let test_file = tmp.path().join("empty_search.txt");
+        fs::write(&test_file, "hello world").expect("write");
+
+        let tool = EditFileTool;
+        let result = tool
+            .execute(
+                json!({"path": "empty_search.txt", "search": "", "replace": "hi"}),
+                &ctx,
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Search string cannot be empty"));
     }
 
     #[tokio::test]

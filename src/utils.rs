@@ -61,9 +61,26 @@ pub fn truncate_with_ellipsis(s: &str, max_len: usize, ellipsis: &str) -> String
     if s.len() <= max_len {
         s.to_string()
     } else {
+        if max_len <= ellipsis.len() {
+            return truncate_to_boundary(ellipsis, max_len).to_string();
+        }
         let truncate_at = max_len.saturating_sub(ellipsis.len());
-        format!("{}{}", &s[..truncate_at], ellipsis)
+        format!("{}{}", truncate_to_boundary(s, truncate_at), ellipsis)
     }
+}
+
+/// Truncate to a UTF-8 safe boundary at or before `max_len` bytes.
+#[must_use]
+pub fn truncate_to_boundary(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    let idx = s
+        .char_indices()
+        .take_while(|(i, _)| *i <= max_len)
+        .last()
+        .map_or(0, |(i, _)| i);
+    &s[..idx]
 }
 
 /// Estimate the total character count across message content blocks.

@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::utils::truncate_to_boundary;
+
 /// Document filenames to search for (in priority order)
 pub const DOC_FILENAMES: &[&str] = &[
     "AGENTS.md",
@@ -93,8 +95,8 @@ pub fn read_project_docs(paths: &[PathBuf], max_bytes: usize) -> Option<String> 
         if let Ok(content) = std::fs::read_to_string(path) {
             let remaining = max_bytes.saturating_sub(total_bytes);
             let content = if content.len() > remaining {
-                // Truncate to remaining bytes at a word boundary if possible
-                let truncated: String = content.chars().take(remaining).collect();
+                // Truncate to remaining bytes at a UTF-8 boundary
+                let truncated = truncate_to_boundary(&content, remaining);
                 format!("{truncated}\n\n[...truncated...]")
             } else {
                 content

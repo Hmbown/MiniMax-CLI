@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::models::Usage;
+use crate::utils::truncate_to_boundary;
 
 // === Command Args ===
 
@@ -900,7 +901,7 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
                     c.index,
                     c.start_char,
                     c.end_char,
-                    &c.preview[..50.min(c.preview.len())]
+                    truncate_to_boundary(&c.preview, 50)
                 )
             })
             .collect();
@@ -919,7 +920,7 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
                     c.index,
                     c.start_char,
                     c.end_char,
-                    &c.preview[..50.min(c.preview.len())]
+                    truncate_to_boundary(&c.preview, 50)
                 )
             })
             .collect();
@@ -938,7 +939,7 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
                     c.index,
                     c.start_char,
                     c.end_char,
-                    &c.preview[..50.min(c.preview.len())]
+                    truncate_to_boundary(&c.preview, 50)
                 )
             })
             .collect();
@@ -957,7 +958,7 @@ fn eval_expr_internal(ctx: &RlmContext, code: &str) -> Result<String> {
                     c.index,
                     c.start_char,
                     c.end_char,
-                    &c.preview[..50.min(c.preview.len())]
+                    truncate_to_boundary(&c.preview, 50)
                 )
             })
             .collect();

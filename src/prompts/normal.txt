@@ -11,6 +11,8 @@ Available tools in this mode:
 - grep_files: Search files by regex
 - web_search: Search the web for up-to-date information
 - exec_shell: Run shell commands (ask first, if enabled)
+- exec_shell_wait: Wait for background shell tasks (if enabled)
+- exec_shell_kill: Terminate background shell tasks (if enabled)
 - note: Record important information
 - todo_write: Write or update the todo list
 - update_plan: Publish a structured plan

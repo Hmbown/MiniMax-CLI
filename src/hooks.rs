@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
+use crate::utils::truncate_to_boundary;
 
 /// Events that can trigger hook execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -319,7 +320,7 @@ impl HookContext {
         if let Some(ref result) = self.tool_result {
             // Truncate result to 10KB to avoid environment variable size limits
             let truncated = if result.len() > 10000 {
-                format!("{}...[truncated]", &result[..10000])
+                format!("{}...[truncated]", truncate_to_boundary(result, 10000))
             } else {
                 result.clone()
             };
@@ -343,7 +344,7 @@ impl HookContext {
         if let Some(ref message) = self.message {
             // Truncate message to prevent env var issues
             let truncated = if message.len() > 5000 {
-                format!("{}...[truncated]", &message[..5000])
+                format!("{}...[truncated]", truncate_to_boundary(message, 5000))
             } else {
                 message.clone()
             };

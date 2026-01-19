@@ -115,8 +115,9 @@ impl ToolSpec for ApplyPatchTool {
 
         let file_path = context.resolve_path(path_str)?;
 
+        let file_exists = file_path.exists();
         // Read existing file content (or empty for new files)
-        let original_content = if file_path.exists() {
+        let original_content = if file_exists {
             fs::read_to_string(&file_path).map_err(|e| {
                 ToolError::execution_failed(format!(
                     "Failed to read {}: {}",
@@ -132,6 +133,12 @@ impl ToolSpec for ApplyPatchTool {
                 file_path.display()
             )));
         };
+        let had_trailing_newline = if file_exists {
+            original_content.ends_with('\n')
+        } else {
+            true
+        };
+        let patch_no_newline = patch_indicates_no_newline(patch_text);
 
         // Parse the patch
         let hunks = parse_unified_diff(patch_text)?;
@@ -160,7 +167,10 @@ impl ToolSpec for ApplyPatchTool {
         }
 
         // Write the patched file
-        let new_content = lines.join("\n");
+        let mut new_content = lines.join("\n");
+        if !new_content.is_empty() && had_trailing_newline && !patch_no_newline {
+            new_content.push('\n');
+        }
 
         // Create parent directories if needed
         if let Some(parent) = file_path.parent() {
@@ -217,6 +227,38 @@ fn parse_unified_diff(patch: &str) -> Result<Vec<Hunk>, ToolError> {
     }
 
     Ok(hunks)
+}
+
+fn patch_indicates_no_newline(patch: &str) -> bool {
+    let mut last_line_kind: Option<char> = None;
+    let mut new_file_no_newline = false;
+
+    for line in patch.lines() {
+        if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") {
+            last_line_kind = None;
+            continue;
+        }
+
+        if line.starts_with("\\ No newline at end of file") {
+            if matches!(last_line_kind, Some('+') | Some(' ')) {
+                new_file_no_newline = true;
+            }
+            last_line_kind = None;
+            continue;
+        }
+
+        if line.starts_with('+') {
+            last_line_kind = Some('+');
+        } else if line.starts_with('-') {
+            last_line_kind = Some('-');
+        } else if line.starts_with(' ') || line.is_empty() {
+            last_line_kind = Some(' ');
+        } else {
+            last_line_kind = Some(' ');
+        }
+    }
+
+    new_file_no_newline
 }
 
 /// Parse a hunk header and its content
@@ -514,6 +556,31 @@ mod tests {
         let content = fs::read_to_string(tmp.path().join("test.txt")).expect("read");
         assert!(content.contains("modified"));
         assert!(!content.contains("line2"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_respects_no_newline_marker() {
+        let tmp = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(tmp.path().to_path_buf());
+
+        fs::write(tmp.path().join("test.txt"), "line1\n").expect("write");
+
+        let patch = r"@@ -1,1 +1,1 @@
+-line1
++line1
+\ No newline at end of file
+";
+
+        let tool = ApplyPatchTool;
+        let result = tool
+            .execute(json!({"path": "test.txt", "patch": patch}), &ctx)
+            .await
+            .expect("execute");
+
+        assert!(result.success);
+
+        let content = fs::read_to_string(tmp.path().join("test.txt")).expect("read");
+        assert!(!content.ends_with('\n'));
     }
 
     #[tokio::test]
