@@ -22,18 +22,19 @@ use tokio_util::sync::CancellationToken;
 use crate::client::AnthropicClient;
 use crate::config::Config;
 use crate::duo::{DuoSession, SharedDuoSession, session_summary as duo_session_summary};
+use crate::features::{Feature, Features};
 use crate::mcp::McpPool;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool, Usage,
 };
 use crate::prompts;
 use crate::rlm::{RlmSession, SharedRlmSession, session_summary as rlm_session_summary};
-use crate::tools::plan::PlanState;
+use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentRuntime, SubAgentType, new_shared_subagent_manager,
 };
-use crate::tools::todo::TodoList;
+use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::app::AppMode;
 
@@ -64,6 +65,12 @@ pub struct EngineConfig {
     pub max_steps: u32,
     /// Maximum number of concurrently active subagents.
     pub max_subagents: usize,
+    /// Feature flags controlling tool availability.
+    pub features: Features,
+    /// Shared todo list for todo tool persistence.
+    pub todo_list: SharedTodoList,
+    /// Shared plan state for update_plan persistence.
+    pub plan_state: SharedPlanState,
     /// Shared RLM session state.
     pub rlm_session: SharedRlmSession,
     /// Shared Duo session state.
@@ -81,6 +88,9 @@ impl Default for EngineConfig {
             mcp_config_path: PathBuf::from("mcp.json"),
             max_steps: 100,
             max_subagents: 5,
+            features: Features::with_defaults(),
+            todo_list: new_shared_todo_list(),
+            plan_state: new_shared_plan_state(),
             rlm_session: Arc::new(Mutex::new(RlmSession::default())),
             duo_session: Arc::new(Mutex::new(DuoSession::new())),
         }
@@ -532,6 +542,11 @@ impl Engine {
         allow_shell: bool,
         trust_mode: bool,
     ) {
+        // Reset cancel token for the new request (in case previous was cancelled)
+        if self.cancel_token.is_cancelled() {
+            self.cancel_token = CancellationToken::new();
+        }
+
         // Emit turn started event
         let _ = self.tx_event.send(Event::TurnStarted).await;
 
@@ -593,52 +608,87 @@ impl Engine {
         ));
 
         // Build tool registry and tool list for the current mode
-        let todo_list = Arc::new(Mutex::new(TodoList::new()));
-        let plan_state = Arc::new(Mutex::new(PlanState::default()));
+        let todo_list = self.config.todo_list.clone();
+        let plan_state = self.config.plan_state.clone();
 
         let tool_context = self.build_tool_context();
-        let mut builder = ToolRegistryBuilder::new().with_full_agent_tools(
-            self.session.allow_shell,
-            todo_list.clone(),
-            plan_state.clone(),
-        );
+        let mut builder = ToolRegistryBuilder::new()
+            .with_file_tools()
+            .with_note_tool()
+            .with_search_tools()
+            .with_todo_tool(todo_list.clone())
+            .with_plan_tool(plan_state.clone())
+            .with_minimax_tools();
+
+        if self.config.features.enabled(Feature::ApplyPatch) {
+            builder = builder.with_patch_tools();
+        }
+        if self.config.features.enabled(Feature::WebSearch) {
+            builder = builder.with_web_tools();
+        }
+        if self.config.features.enabled(Feature::ShellTool) && self.session.allow_shell {
+            builder = builder.with_shell_tools();
+        }
         if mode == AppMode::Rlm {
-            builder = builder.with_rlm_tools(
-                self.config.rlm_session.clone(),
-                self.anthropic_client.clone(),
-                self.session.model.clone(),
-            );
+            if self.config.features.enabled(Feature::Rlm) {
+                builder = builder.with_rlm_tools(
+                    self.config.rlm_session.clone(),
+                    self.anthropic_client.clone(),
+                    self.session.model.clone(),
+                );
+            } else {
+                let _ = self
+                    .tx_event
+                    .send(Event::status("RLM tools are disabled by feature flags"))
+                    .await;
+            }
         }
         if mode == AppMode::Duo {
-            builder = builder.with_duo_tools(self.config.duo_session.clone());
+            if self.config.features.enabled(Feature::Duo) {
+                builder = builder.with_duo_tools(self.config.duo_session.clone());
+            } else {
+                let _ = self
+                    .tx_event
+                    .send(Event::status("Duo tools are disabled by feature flags"))
+                    .await;
+            }
         }
 
         let tool_registry = match mode {
             AppMode::Agent | AppMode::Yolo | AppMode::Rlm | AppMode::Duo => {
-                let runtime = if let Some(client) = self.anthropic_client.clone() {
-                    Some(SubAgentRuntime::new(
-                        client,
-                        self.session.model.clone(),
-                        tool_context.clone(),
-                        self.session.allow_shell,
-                        Some(self.tx_event.clone()),
-                    ))
+                if self.config.features.enabled(Feature::Subagents) {
+                    let runtime = if let Some(client) = self.anthropic_client.clone() {
+                        Some(SubAgentRuntime::new(
+                            client,
+                            self.session.model.clone(),
+                            tool_context.clone(),
+                            self.session.allow_shell,
+                            Some(self.tx_event.clone()),
+                        ))
+                    } else {
+                        None
+                    };
+                    Some(
+                        builder
+                            .with_subagent_tools(
+                                self.subagent_manager.clone(),
+                                runtime
+                                    .expect("sub-agent runtime should exist with active client"),
+                            )
+                            .build(tool_context),
+                    )
                 } else {
-                    None
-                };
-                Some(
-                    builder
-                        .with_subagent_tools(
-                            self.subagent_manager.clone(),
-                            runtime.expect("sub-agent runtime should exist with active client"),
-                        )
-                        .build(tool_context),
-                )
+                    Some(builder.build(tool_context))
+                }
             }
             _ => Some(builder.build(tool_context)),
         };
 
-        let mcp_tools = self.mcp_tools().await;
+        let mcp_tools = if self.config.features.enabled(Feature::Mcp) {
+            self.mcp_tools().await
+        } else {
+            Vec::new()
+        };
         let tools = tool_registry.as_ref().map(|registry| {
             let mut tools = registry.to_api_tools();
             tools.extend(mcp_tools);

@@ -8,10 +8,11 @@
 
 #![allow(dead_code)]
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use crate::palette;
 /// Collects streaming text and commits complete lines.
 #[derive(Debug, Clone)]
 pub struct MarkdownStreamCollector {
@@ -115,7 +116,7 @@ impl MarkdownStreamCollector {
         let width = self.width.unwrap_or(80);
         let style = if self.is_thinking {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::STATUS_WARNING)
                 .add_modifier(Modifier::DIM | Modifier::ITALIC)
         } else {
             Style::default()

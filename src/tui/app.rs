@@ -12,12 +12,14 @@ use crate::config::{Config, has_api_key, save_api_key};
 use crate::duo::{SharedDuoSession, new_shared_duo_session};
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
 use crate::models::{Message, SystemPrompt};
+use crate::palette::{self, UiTheme};
 use crate::rlm::{RlmSession, SharedRlmSession};
+use crate::settings::Settings;
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tui::approval::ApprovalMode;
 use crate::tui::clipboard::{ClipboardContent, ClipboardHandler};
-use crate::tui::history::HistoryCell;
+use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptScroll};
 use crate::tui::selection::TranscriptSelection;
@@ -37,7 +39,7 @@ pub enum OnboardingState {
 }
 
 /// Supported application modes for the TUI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppMode {
     Normal,
     Agent,
@@ -169,13 +171,17 @@ pub struct App {
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
     pub auto_compact: bool,
+    pub show_thinking: bool,
+    pub show_tool_details: bool,
     #[allow(dead_code)]
     pub compact_threshold: usize,
+    pub max_input_history: usize,
     pub total_tokens: u32,
     /// Tokens used in the current conversation (reset on clear/load)
     pub total_conversation_tokens: u32,
     pub allow_shell: bool,
     pub max_subagents: usize,
+    pub ui_theme: UiTheme,
     // Onboarding
     pub onboarding: OnboardingState,
     pub api_key_input: String,
@@ -315,14 +321,29 @@ impl App {
         } = options;
         // Check if API key exists
         let needs_onboarding = !has_api_key(config);
+        let settings = Settings::load().unwrap_or_else(|_| Settings::default());
+        let auto_compact = settings.auto_compact;
+        let show_thinking = settings.show_thinking;
+        let show_tool_details = settings.show_tool_details;
+        let max_input_history = settings.max_input_history;
+        let ui_theme = palette::ui_theme(&settings.theme);
+        let model = settings.default_model.clone().unwrap_or(model);
 
         // Start in YOLO mode if --yolo flag was passed
+        let preferred_mode = match settings.default_mode.as_str() {
+            "agent" => AppMode::Agent,
+            "plan" => AppMode::Plan,
+            "yolo" => AppMode::Yolo,
+            "rlm" => AppMode::Rlm,
+            "duo" => AppMode::Duo,
+            _ => AppMode::Normal,
+        };
         let initial_mode = if yolo {
             AppMode::Yolo
         } else if start_in_agent_mode {
             AppMode::Agent
         } else {
-            AppMode::Normal
+            preferred_mode
         };
 
         let history = if needs_onboarding {
@@ -386,12 +407,16 @@ impl App {
             system_prompt: None,
             input_history: Vec::new(),
             history_index: None,
-            auto_compact: false,
+            auto_compact,
+            show_thinking,
+            show_tool_details,
             compact_threshold: 50000,
+            max_input_history,
             total_tokens: 0,
             total_conversation_tokens: 0,
             allow_shell: true,
             max_subagents,
+            ui_theme,
             onboarding: if needs_onboarding {
                 OnboardingState::Welcome
             } else {
@@ -530,6 +555,13 @@ impl App {
 
     pub fn mark_history_updated(&mut self) {
         self.history_version = self.history_version.wrapping_add(1);
+    }
+
+    pub fn transcript_render_options(&self) -> TranscriptRenderOptions {
+        TranscriptRenderOptions {
+            show_thinking: self.show_thinking,
+            show_tool_details: self.show_tool_details,
+        }
     }
 
     pub fn cursor_byte_index(&self) -> usize {
@@ -698,6 +730,12 @@ impl App {
         let input = self.input.clone();
         if !input.starts_with('/') {
             self.input_history.push(input.clone());
+            if self.max_input_history == 0 {
+                self.input_history.clear();
+            } else if self.input_history.len() > self.max_input_history {
+                let excess = self.input_history.len() - self.max_input_history;
+                self.input_history.drain(0..excess);
+            }
         }
         self.history_index = None;
         self.clear_input();
@@ -775,6 +813,9 @@ impl App {
     pub fn clear_todos(&mut self) {
         if let Ok(mut plan) = self.plan_state.lock() {
             *plan = crate::tools::plan::PlanState::default();
+        }
+        if let Ok(mut todos) = self.todos.lock() {
+            todos.clear();
         }
     }
 }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::features::{Features, FeaturesToml, is_known_feature_key};
 use crate::hooks::HooksConfig;
 
 // === Types ===
@@ -62,6 +63,7 @@ pub struct Config {
     pub allow_shell: Option<bool>,
     pub max_subagents: Option<usize>,
     pub retry: Option<RetryConfig>,
+    pub features: Option<FeaturesToml>,
 
     /// Lifecycle hooks configuration
     #[serde(default)]
@@ -115,6 +117,13 @@ impl Config {
         {
             anyhow::bail!("api_key cannot be empty string");
         }
+        if let Some(features) = &self.features {
+            for key in features.entries.keys() {
+                if !is_known_feature_key(key) {
+                    anyhow::bail!("Unknown feature flag: {key}");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -151,6 +160,26 @@ impl Config {
 
     pub fn anthropic_api_key(&self) -> Result<String> {
         self.minimax_api_key()
+    }
+
+
+    /// Resolve enabled features from defaults and config entries.
+    #[must_use]
+    pub fn features(&self) -> Features {
+        let mut features = Features::with_defaults();
+        if let Some(table) = &self.features {
+            features.apply_map(&table.entries);
+        }
+        features
+    }
+
+    pub fn set_feature(&mut self, key: &str, enabled: bool) -> Result<()> {
+        if !is_known_feature_key(key) {
+            anyhow::bail!("Unknown feature flag: {key}");
+        }
+        let table = self.features.get_or_insert_with(FeaturesToml::default);
+        table.entries.insert(key.to_string(), enabled);
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -379,6 +408,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         allow_shell: override_cfg.allow_shell.or(base.allow_shell),
         max_subagents: override_cfg.max_subagents.or(base.max_subagents),
         retry: override_cfg.retry.or(base.retry),
+        features: override_cfg.features.or(base.features),
         hooks: override_cfg.hooks.or(base.hooks),
     }
 }
@@ -428,7 +458,7 @@ pub fn save_api_key(api_key: &str) -> Result<PathBuf> {
         // Create new minimal config
         format!(
             r#"# MiniMax CLI Configuration
-# Get your API key from https://platform.minimax.chat
+# Get your API key from https://platform.minimax.io
 
 api_key = "{api_key}"
 

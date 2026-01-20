@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::client::MiniMaxClient;
 use crate::modules::files::{FileUploadOptions, retrieve_file, upload};
+use crate::palette;
 use crate::utils::{
     extension_from_url, output_path, pretty_json, timestamped_filename, write_bytes,
 };
@@ -144,7 +145,8 @@ pub async fn t2a(client: &MiniMaxClient, options: T2aOptions) -> Result<PathBuf>
         let filename = timestamped_filename("speech", &extension);
         let path = output_path(&options.output_dir, &filename);
         write_bytes(&path, &bytes)?;
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
         Ok(path)
     } else {
         let response: Value = client.post_json("/v1/t2a_v2", &body).await?;
@@ -306,7 +308,8 @@ async fn handle_audio_response(
         let filename = timestamped_filename("speech", &extension);
         let path = output_path(output_dir, &filename);
         write_bytes(&path, &bytes)?;
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
         return Ok(path);
     }
 
@@ -320,7 +323,8 @@ async fn handle_audio_response(
             let filename = timestamped_filename("speech", &extension);
             let path = output_path(output_dir, &filename);
             write_bytes(&path, &bytes)?;
-            println!("{} {}", "Saved".green().bold(), path.display());
+            let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+            println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
             return Ok(path);
         }
     }
@@ -334,7 +338,8 @@ async fn handle_audio_response(
         let filename = timestamped_filename("speech", &extension);
         let path = output_path(output_dir, &filename);
         write_bytes(&path, &bytes)?;
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
         return Ok(path);
     }
 

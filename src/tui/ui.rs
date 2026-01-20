@@ -20,7 +20,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -33,6 +33,7 @@ use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::HookEvent;
 use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
+use crate::palette;
 use crate::prompts;
 use crate::rlm;
 use crate::session_manager::{SessionManager, create_saved_session, update_session};
@@ -53,14 +54,10 @@ use super::history::{
     summarize_tool_args, summarize_tool_output,
 };
 use super::views::{HelpView, ModalKind, ViewEvent};
-use super::widgets::{ChatWidget, ComposerWidget, Renderable};
+use super::widgets::{ChatWidget, ComposerWidget, HeaderData, HeaderWidget, Renderable};
 
 // === Constants ===
 
-const MINIMAX_RED: Color = Color::Rgb(220, 80, 80);
-const MINIMAX_CORAL: Color = Color::Rgb(240, 128, 100);
-const MINIMAX_ORANGE: Color = Color::Rgb(255, 165, 80);
-const MINIMAX_CYAN: Color = Color::Rgb(80, 200, 200);
 const MAX_QUEUED_PREVIEW: usize = 3;
 const AUTO_RLM_MIN_FILE_BYTES: u64 = 200_000;
 const AUTO_RLM_HINT_FILE_BYTES: u64 = 50_000;
@@ -183,6 +180,9 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         mcp_config_path: config.mcp_config_path(),
         max_steps: 100,
         max_subagents: app.max_subagents,
+        features: config.features(),
+        todo_list: app.todos.clone(),
+        plan_state: app.plan_state.clone(),
         rlm_session: app.rlm_session.clone(),
         duo_session: app.duo_session.clone(),
     };
@@ -673,19 +673,8 @@ async fn run_event_loop(
                 }
                 KeyCode::Tab => {
                     app.cycle_mode();
-                    match app.mode {
-                        AppMode::Rlm => {
-                            app.rlm_repl_active = false;
-                            app.add_message(HistoryCell::System {
-                                content: crate::commands::rlm::welcome_message(),
-                            });
-                        }
-                        AppMode::Duo => {
-                            app.add_message(HistoryCell::System {
-                                content: duo_welcome_message(),
-                            });
-                        }
-                        _ => {}
+                    if app.mode == AppMode::Rlm {
+                        app.rlm_repl_active = false;
                     }
                 }
                 // Input handling
@@ -1480,6 +1469,7 @@ fn render(f: &mut Frame, app: &mut App) {
         return;
     }
 
+    let header_height = 1;
     let footer_height = 1;
     let queued_preview = app.queued_message_previews(MAX_QUEUED_PREVIEW);
     let queued_lines = if queued_preview.is_empty() {
@@ -1492,7 +1482,9 @@ fn render(f: &mut Frame, app: &mut App) {
     let status_height =
         u16::try_from(status_lines + queued_lines + editing_lines).unwrap_or(u16::MAX);
     let prompt = prompt_for_mode(app.mode, app.rlm_repl_active);
-    let available_height = size.height.saturating_sub(footer_height + status_height);
+    let available_height =
+        size.height
+            .saturating_sub(header_height + footer_height + status_height);
     let composer_height = {
         let composer_widget = ComposerWidget::new(app, prompt, available_height);
         composer_widget.desired_height(size.width)
@@ -1501,6 +1493,7 @@ fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(header_height),
             Constraint::Min(1),
             Constraint::Length(status_height),
             Constraint::Length(composer_height),
@@ -1508,24 +1501,38 @@ fn render(f: &mut Frame, app: &mut App) {
         ])
         .split(size);
 
+    // Render header
     {
-        let chat_widget = ChatWidget::new(app, chunks[0]);
+        let header_data = HeaderData::new(
+            app.mode,
+            &app.model,
+            app.total_conversation_tokens,
+            app.is_loading,
+            app.ui_theme.header_bg,
+        );
+        let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
-        chat_widget.render(chunks[0], buf);
+        header_widget.render(chunks[0], buf);
+    }
+
+    {
+        let chat_widget = ChatWidget::new(app, chunks[1]);
+        let buf = f.buffer_mut();
+        chat_widget.render(chunks[1], buf);
     }
     if status_height > 0 {
-        render_status_indicator(f, chunks[1], app, &queued_preview);
+        render_status_indicator(f, chunks[2], app, &queued_preview);
     }
     let cursor_pos = {
         let composer_widget = ComposerWidget::new(app, prompt, available_height);
         let buf = f.buffer_mut();
-        composer_widget.render(chunks[2], buf);
-        composer_widget.cursor_pos(chunks[2])
+        composer_widget.render(chunks[3], buf);
+        composer_widget.cursor_pos(chunks[3])
     };
     if let Some(cursor_pos) = cursor_pos {
         f.set_cursor_position(cursor_pos);
     }
-    render_footer(f, chunks[3], app);
+    render_footer(f, chunks[4], app);
 
     if !app.view_stack.is_empty() {
         let buf = f.buffer_mut();
@@ -1597,24 +1604,36 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
         let spinner = minimax_squiggle(app.turn_started_at);
         let label = minimax_thinking_label(app.turn_started_at);
         let mut spans = vec![
-            Span::styled(spinner, Style::default().fg(MINIMAX_CORAL).bold()),
+            Span::styled(
+                spinner,
+                Style::default().fg(palette::MINIMAX_ORANGE).bold(),
+            ),
             Span::raw(" "),
-            Span::styled(label, Style::default().fg(Color::Yellow).bold()),
+            Span::styled(
+                label,
+                Style::default().fg(palette::STATUS_WARNING).bold(),
+            ),
         ];
         if let Some(header) = header {
             spans.push(Span::raw(": "));
-            spans.push(Span::styled(header, Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(
+                header,
+                Style::default().fg(palette::STATUS_WARNING),
+            ));
         }
 
         if let Some(elapsed) = elapsed {
             spans.push(Span::raw(" | "));
-            spans.push(Span::styled(elapsed, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                elapsed,
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
         }
 
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
             "Esc/Ctrl+C to interrupt",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         ));
 
         lines.push(Line::from(spans));
@@ -1627,9 +1646,9 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
         let max_len = available.saturating_sub(prefix_width).max(1);
         let preview = truncate_line_to_width(&draft.display, max_len);
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+            Span::styled(prefix, Style::default().fg(palette::TEXT_MUTED)),
             Span::raw(" "),
-            Span::styled(preview, Style::default().fg(Color::Yellow)),
+            Span::styled(preview, Style::default().fg(palette::STATUS_WARNING)),
         ]));
     }
 
@@ -1640,7 +1659,7 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
         let header = truncate_line_to_width(&header, available.max(1));
         lines.push(Line::from(vec![Span::styled(
             header,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         )]));
 
         for (idx, message) in queued.iter().enumerate() {
@@ -1652,7 +1671,7 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
             let preview = truncate_line_to_width(&label, available.max(1));
             lines.push(Line::from(vec![Span::styled(
                 preview,
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::TEXT_DIM),
             )]));
         }
     }
@@ -1668,7 +1687,10 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             mode_badge_style(app.mode),
         ),
         Span::raw(" | "),
-        Span::styled(context_indicator(app), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            context_indicator(app),
+            Style::default().fg(palette::TEXT_MUTED),
+        ),
     ];
 
     if let Some((label, style)) = rlm_usage_badge(app) {
@@ -1680,7 +1702,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
             format!("last tokens in/out: {prompt}/{completion}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         ));
     }
 
@@ -1689,7 +1711,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
             "Alt+Up/Down scroll",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         ));
     }
 
@@ -1697,7 +1719,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
             "PgUp/PgDn/Home/End",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         ));
         if app.last_transcript_total > 0 {
             spans.push(Span::raw(" "));
@@ -1707,7 +1729,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                     app.last_transcript_top + 1,
                     app.last_transcript_total
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             ));
         }
     }
@@ -1716,13 +1738,16 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(" | "));
         spans.push(Span::styled(
             copy_selection_hint(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         ));
     }
 
     if let Some(ref msg) = app.status_message {
         spans.push(Span::raw(" | "));
-        spans.push(Span::styled(msg, Style::default().fg(Color::Yellow)));
+        spans.push(Span::styled(
+            msg,
+            Style::default().fg(palette::STATUS_WARNING),
+        ));
     }
 
     let footer = Paragraph::new(Line::from(spans));
@@ -1744,11 +1769,13 @@ fn rlm_usage_badge(app: &App) -> Option<(String, Style)> {
         || usage.output_tokens >= RLM_BUDGET_HARD_OUTPUT_TOKENS;
 
     let style = if hard {
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette::STATUS_ERROR)
+            .add_modifier(Modifier::BOLD)
     } else if warn {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(palette::STATUS_WARNING)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::TEXT_MUTED)
     };
 
     Some((
@@ -1760,41 +1787,22 @@ fn rlm_usage_badge(app: &App) -> Option<(String, Style)> {
     ))
 }
 
-fn mode_color(mode: AppMode) -> Color {
+fn mode_color(mode: AppMode) -> ratatui::style::Color {
     match mode {
-        AppMode::Normal => Color::Gray,
-        AppMode::Agent => MINIMAX_RED,
-        AppMode::Yolo => Color::Green,
-        AppMode::Plan => MINIMAX_ORANGE,
-        AppMode::Rlm => MINIMAX_CORAL,
-        AppMode::Duo => MINIMAX_CYAN,
+        AppMode::Normal => palette::MINIMAX_SLATE,
+        AppMode::Agent => palette::MINIMAX_BLUE,
+        AppMode::Yolo => palette::STATUS_ERROR,
+        AppMode::Plan => palette::MINIMAX_ORANGE,
+        AppMode::Rlm => palette::MINIMAX_INK,
+        AppMode::Duo => palette::MINIMAX_MAGENTA,
     }
 }
 
 fn mode_badge_style(mode: AppMode) -> Style {
     Style::default()
-        .fg(Color::White)
+        .fg(palette::TEXT_PRIMARY)
         .bg(mode_color(mode))
         .add_modifier(Modifier::BOLD)
-}
-
-fn duo_welcome_message() -> String {
-    [
-        "MiniMax Duo Mode (Player-Coach Autocoding)",
-        "Based on the g3 paper's adversarial cooperation paradigm",
-        "Press Tab to exit Duo mode",
-        "",
-        "Tools available:",
-        "  duo_init     - Initialize session with requirements",
-        "  duo_player   - Get implementation prompt (builder role)",
-        "  duo_coach    - Get validation prompt (critic role)",
-        "  duo_advance  - Submit coach feedback and advance state",
-        "  duo_status   - Check current session state",
-        "",
-        "Workflow: init → player → coach → advance → (repeat until approved)",
-        "The coach validates implementation against requirements.",
-    ]
-    .join("\n")
 }
 
 fn prompt_for_mode(mode: AppMode, rlm_repl_active: bool) -> &'static str {
@@ -2147,7 +2155,7 @@ fn slice_text(text: &str, start: usize, end: usize) -> String {
 #[allow(clippy::too_many_lines)]
 fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
     // Clear the entire screen with a dark background
-    let block = Block::default().style(Style::default().bg(Color::Black));
+    let block = Block::default().style(Style::default().bg(palette::MINIMAX_BLACK));
     f.render_widget(block, area);
 
     // Center the content
@@ -2167,9 +2175,9 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             // Logo
             for (i, line) in LOGO.lines().enumerate() {
                 let color = match i % 3 {
-                    0 => MINIMAX_RED,
-                    1 => MINIMAX_CORAL,
-                    _ => MINIMAX_ORANGE,
+                    0 => palette::MINIMAX_BLUE,
+                    1 => palette::MINIMAX_MAGENTA,
+                    _ => palette::MINIMAX_ORANGE,
                 };
                 lines.push(Line::from(Span::styled(
                     line,
@@ -2179,49 +2187,55 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
 
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Welcome to ", Style::default().fg(Color::White)),
-                Span::styled("MiniMax CLI", Style::default().fg(MINIMAX_RED).bold()),
+                Span::styled("Welcome to ", Style::default().fg(palette::TEXT_PRIMARY)),
+                Span::styled(
+                    "MiniMax CLI",
+                    Style::default().fg(palette::MINIMAX_BLUE).bold(),
+                ),
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Unofficial CLI for MiniMax M2.1 API",
-                Style::default().fg(Color::DarkGray).italic(),
+                Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
             lines.push(Line::from(Span::styled(
                 "Not affiliated with MiniMax Inc.",
-                Style::default().fg(Color::DarkGray).italic(),
+                Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "To get started, you'll need a MiniMax API key.",
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::TEXT_PRIMARY),
             )));
             lines.push(Line::from(Span::styled(
-                "Get yours at: https://platform.minimax.chat",
-                Style::default().fg(MINIMAX_CORAL),
+                "Get yours at: https://platform.minimax.io",
+                Style::default().fg(palette::MINIMAX_ORANGE),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Enter", Style::default().fg(Color::White).bold()),
+                Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled("Enter", Style::default().fg(palette::TEXT_PRIMARY).bold()),
                 Span::styled(
                     " to enter your API key",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Ctrl+C", Style::default().fg(Color::White).bold()),
-                Span::styled(" to exit", Style::default().fg(Color::DarkGray)),
+                Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    "Ctrl+C",
+                    Style::default().fg(palette::TEXT_PRIMARY).bold(),
+                ),
+                Span::styled(" to exit", Style::default().fg(palette::TEXT_MUTED)),
             ]));
 
             let paragraph = Paragraph::new(lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(MINIMAX_RED)),
+                        .border_style(Style::default().fg(palette::MINIMAX_BLUE)),
                 )
                 .centered();
             f.render_widget(paragraph, content_area);
@@ -2230,12 +2244,12 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             let mut lines = vec![
                 Line::from(Span::styled(
                     "Enter Your API Key",
-                    Style::default().fg(MINIMAX_RED).bold(),
+                    Style::default().fg(palette::MINIMAX_BLUE).bold(),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Paste your MiniMax API key below:",
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT_PRIMARY),
                 )),
                 Line::from(""),
             ];
@@ -2244,7 +2258,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             let masked_key = if app.api_key_input.is_empty() {
                 Span::styled(
                     "(paste your key here)",
-                    Style::default().fg(Color::DarkGray).italic(),
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
                 )
             } else {
                 // Show first 8 chars, mask the rest
@@ -2252,7 +2266,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
                 let hidden = "*".repeat(app.api_key_input.len().saturating_sub(8));
                 Span::styled(
                     format!("{visible}{hidden}"),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(palette::STATUS_SUCCESS),
                 )
             };
             lines.push(Line::from(masked_key));
@@ -2263,27 +2277,27 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             if let Some(ref msg) = app.status_message {
                 lines.push(Line::from(Span::styled(
                     msg,
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(palette::STATUS_WARNING),
                 )));
                 lines.push(Line::from(""));
             }
 
             lines.push(Line::from(vec![
-                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Enter", Style::default().fg(Color::White).bold()),
-                Span::styled(" to save", Style::default().fg(Color::DarkGray)),
+                Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled("Enter", Style::default().fg(palette::TEXT_PRIMARY).bold()),
+                Span::styled(" to save", Style::default().fg(palette::TEXT_MUTED)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::White).bold()),
-                Span::styled(" to go back", Style::default().fg(Color::DarkGray)),
+                Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled("Esc", Style::default().fg(palette::TEXT_PRIMARY).bold()),
+                Span::styled(" to go back", Style::default().fg(palette::TEXT_MUTED)),
             ]));
 
             let paragraph = Paragraph::new(lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(MINIMAX_CORAL)),
+                        .border_style(Style::default().fg(palette::MINIMAX_ORANGE)),
                 )
                 .centered();
             f.render_widget(paragraph, content_area);
@@ -2292,29 +2306,29 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             let lines = vec![
                 Line::from(Span::styled(
                     "API Key Saved!",
-                    Style::default().fg(Color::Green).bold(),
+                    Style::default().fg(palette::STATUS_SUCCESS).bold(),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
                     "Your API key has been saved to:",
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT_PRIMARY),
                 )),
                 Line::from(Span::styled(
                     "~/.minimax/config.toml",
-                    Style::default().fg(MINIMAX_CORAL),
+                    Style::default().fg(palette::MINIMAX_ORANGE),
                 )),
                 Line::from(""),
                 Line::from(""),
                 Line::from(Span::styled(
                     "You're all set! Start chatting with MiniMax M2.1",
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT_PRIMARY),
                 )),
                 Line::from(""),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("Enter", Style::default().fg(Color::White).bold()),
-                    Span::styled(" to continue", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
+                    Span::styled("Enter", Style::default().fg(palette::TEXT_PRIMARY).bold()),
+                    Span::styled(" to continue", Style::default().fg(palette::TEXT_MUTED)),
                 ]),
             ];
 
@@ -2322,7 +2336,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Green)),
+                        .border_style(Style::default().fg(palette::STATUS_SUCCESS)),
                 )
                 .centered();
             f.render_widget(paragraph, content_area);

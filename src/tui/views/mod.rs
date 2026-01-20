@@ -3,6 +3,7 @@ use ratatui::{buffer::Buffer, layout::Rect};
 use std::fmt;
 
 use crate::tui::approval::ReviewDecision;
+use crate::palette;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
@@ -146,13 +147,10 @@ impl ModalView for HelpView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         use ratatui::{
             prelude::Stylize,
-            style::{Color, Style},
+            style::Style,
             text::{Line, Span},
             widgets::{Block, Borders, Clear, Paragraph, Widget},
         };
-
-        const MINIMAX_RED: Color = Color::Rgb(220, 80, 80);
-        const MINIMAX_CORAL: Color = Color::Rgb(240, 128, 100);
 
         let popup_width = 65.min(area.width.saturating_sub(4));
         let popup_height = 24.min(area.height.saturating_sub(4));
@@ -169,18 +167,18 @@ impl ModalView for HelpView {
         let mut help_lines: Vec<Line> = vec![
             Line::from(vec![Span::styled(
                 "MiniMax CLI Help",
-                Style::default().fg(MINIMAX_RED).bold(),
+                Style::default().fg(palette::MINIMAX_BLUE).bold(),
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Modes:",
-                Style::default().fg(MINIMAX_CORAL).bold(),
+                Style::default().fg(palette::MINIMAX_ORANGE).bold(),
             )]),
             Line::from("  Tab cycles modes: Normal → Plan → Agent → Yolo → RLM"),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Commands:",
-                Style::default().fg(MINIMAX_CORAL).bold(),
+                Style::default().fg(palette::MINIMAX_ORANGE).bold(),
             )]),
         ];
 
@@ -194,7 +192,7 @@ impl ModalView for HelpView {
         help_lines.push(Line::from(""));
         help_lines.push(Line::from(vec![Span::styled(
             "Tools:",
-            Style::default().fg(MINIMAX_CORAL).bold(),
+            Style::default().fg(palette::MINIMAX_ORANGE).bold(),
         )]));
         help_lines.push(Line::from(
             "  web_search   - Search the web (DuckDuckGo; MCP optional)",
@@ -203,7 +201,7 @@ impl ModalView for HelpView {
         help_lines.push(Line::from(""));
         help_lines.push(Line::from(vec![Span::styled(
             "Keys:",
-            Style::default().fg(MINIMAX_CORAL).bold(),
+            Style::default().fg(palette::MINIMAX_ORANGE).bold(),
         )]));
         help_lines.push(Line::from("  Enter        - Send message"));
         help_lines.push(Line::from("  Esc          - Cancel request"));
@@ -228,14 +226,20 @@ impl ModalView for HelpView {
                 Block::default()
                     .title(Line::from(vec![Span::styled(
                         " Help ",
-                        Style::default().fg(MINIMAX_RED).bold(),
+                        Style::default().fg(palette::MINIMAX_BLUE).bold(),
                     )]))
                     .title_bottom(Line::from(vec![
-                        Span::styled(" Esc to close ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(scroll_indicator, Style::default().fg(MINIMAX_CORAL)),
+                        Span::styled(
+                            " Esc to close ",
+                            Style::default().fg(palette::TEXT_MUTED),
+                        ),
+                        Span::styled(
+                            scroll_indicator,
+                            Style::default().fg(palette::MINIMAX_ORANGE),
+                        ),
                     ]))
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(MINIMAX_CORAL)),
+                    .border_style(Style::default().fg(palette::MINIMAX_ORANGE)),
             )
             .scroll((scroll as u16, 0));
 

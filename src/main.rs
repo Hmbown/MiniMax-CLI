@@ -4,7 +4,7 @@ use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use dotenvy::dotenv;
 
@@ -15,16 +15,20 @@ mod compaction;
 mod config;
 mod core;
 mod duo;
+mod execpolicy;
+mod features;
 mod hooks;
 mod llm_client;
 mod logging;
 mod mcp;
 mod models;
 mod modules;
+mod palette;
 mod pricing;
 mod project_context;
 mod project_doc;
 mod prompts;
+mod responses_api_proxy;
 mod rlm;
 mod sandbox;
 mod session_manager;
@@ -51,6 +55,9 @@ struct Cli {
     /// Subcommand to run
     #[command(subcommand)]
     command: Option<Commands>,
+
+    #[command(flatten)]
+    feature_toggles: FeatureToggles,
 
     /// Send a one-shot prompt (non-interactive)
     #[arg(short, long)]
@@ -174,6 +181,99 @@ enum Commands {
         #[arg(long)]
         skip_video: bool,
     },
+    /// Execpolicy tooling
+    Execpolicy(ExecpolicyCommand),
+    /// Inspect feature flags
+    Features(FeaturesCli),
+    /// Run a command inside the sandbox
+    Sandbox(SandboxArgs),
+    /// Internal: run the responses API proxy.
+    #[command(hide = true)]
+    ResponsesApiProxy(responses_api_proxy::Args),
+}
+
+#[derive(Args, Debug, Default, Clone)]
+struct FeatureToggles {
+    /// Enable a feature (repeatable). Equivalent to `features.<name>=true`.
+    #[arg(long = "enable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    enable: Vec<String>,
+
+    /// Disable a feature (repeatable). Equivalent to `features.<name>=false`.
+    #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    disable: Vec<String>,
+}
+
+impl FeatureToggles {
+    fn apply(&self, config: &mut Config) -> Result<()> {
+        for feature in &self.enable {
+            config.set_feature(feature, true)?;
+        }
+        for feature in &self.disable {
+            config.set_feature(feature, false)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+struct ExecpolicyCommand {
+    #[command(subcommand)]
+    command: ExecpolicySubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum ExecpolicySubcommand {
+    /// Check execpolicy files against a command
+    Check(execpolicy::ExecPolicyCheckCommand),
+}
+
+#[derive(Args, Debug, Clone)]
+struct FeaturesCli {
+    #[command(subcommand)]
+    command: FeaturesSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum FeaturesSubcommand {
+    /// List known feature flags and their state
+    List,
+}
+
+#[derive(Args, Debug, Clone)]
+struct SandboxArgs {
+    #[command(subcommand)]
+    command: SandboxCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum SandboxCommand {
+    /// Run a command with sandboxing
+    Run {
+        /// Sandbox policy (danger-full-access, read-only, external-sandbox, workspace-write)
+        #[arg(long, default_value = "workspace-write")]
+        policy: String,
+        /// Allow outbound network access
+        #[arg(long)]
+        network: bool,
+        /// Additional writable roots (repeatable)
+        #[arg(long, value_name = "PATH")]
+        writable_root: Vec<PathBuf>,
+        /// Exclude TMPDIR from writable paths
+        #[arg(long)]
+        exclude_tmpdir: bool,
+        /// Exclude /tmp from writable paths
+        #[arg(long)]
+        exclude_slash_tmp: bool,
+        /// Command working directory
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Timeout in milliseconds
+        #[arg(long, default_value_t = 60_000)]
+        timeout_ms: u64,
+        /// Command and arguments to run
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -220,11 +320,7 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                let profile = cli
-                    .profile
-                    .clone()
-                    .or_else(|| std::env::var("MINIMAX_PROFILE").ok());
-                let config = Config::load(cli.config.clone(), profile.as_deref())?;
+                let config = load_config_from_cli(&cli)?;
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                 });
@@ -256,13 +352,17 @@ async fn main() -> Result<()> {
 
                 Ok(())
             }
+            Commands::Execpolicy(command) => run_execpolicy_command(command),
+            Commands::Features(command) => {
+                let config = load_config_from_cli(&cli)?;
+                run_features_command(&config, command)
+            }
+            Commands::Sandbox(args) => run_sandbox_command(args),
+            Commands::ResponsesApiProxy(args) => responses_api_proxy::run_main(args),
         };
     }
 
-    let profile = cli
-        .profile
-        .or_else(|| std::env::var("MINIMAX_PROFILE").ok());
-    let config = Config::load(cli.config, profile.as_deref())?;
+    let config = load_config_from_cli(&cli)?;
 
     let workspace = cli
         .workspace
@@ -314,6 +414,16 @@ async fn main() -> Result<()> {
     .await
 }
 
+fn load_config_from_cli(cli: &Cli) -> Result<Config> {
+    let profile = cli
+        .profile
+        .clone()
+        .or_else(|| std::env::var("MINIMAX_PROFILE").ok());
+    let mut config = Config::load(cli.config.clone(), profile.as_deref())?;
+    cli.feature_toggles.apply(&mut config)?;
+    Ok(config)
+}
+
 /// Generate shell completions for the given shell
 fn generate_completions(shell: Shell) {
     let mut cmd = Cli::command();
@@ -321,12 +431,181 @@ fn generate_completions(shell: Shell) {
     generate(shell, &mut cmd, name, &mut io::stdout());
 }
 
+fn run_execpolicy_command(command: ExecpolicyCommand) -> Result<()> {
+    match command.command {
+        ExecpolicySubcommand::Check(args) => args.run(),
+    }
+}
+
+fn run_features_command(config: &Config, command: FeaturesCli) -> Result<()> {
+    match command.command {
+        FeaturesSubcommand::List => run_features_list(config),
+    }
+}
+
+fn stage_str(stage: features::Stage) -> &'static str {
+    match stage {
+        features::Stage::Experimental => "experimental",
+        features::Stage::Beta => "beta",
+        features::Stage::Stable => "stable",
+        features::Stage::Deprecated => "deprecated",
+        features::Stage::Removed => "removed",
+    }
+}
+
+fn run_features_list(config: &Config) -> Result<()> {
+    let features = config.features();
+    println!("feature\tstage\tenabled");
+    for spec in features::FEATURES {
+        let enabled = features.enabled(spec.id);
+        println!("{}\t{}\t{enabled}", spec.key, stage_str(spec.stage));
+    }
+    Ok(())
+}
+
+fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
+    use crate::sandbox::{CommandSpec, SandboxManager};
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+    use wait_timeout::ChildExt;
+
+    let SandboxCommand::Run {
+        policy,
+        network,
+        writable_root,
+        exclude_tmpdir,
+        exclude_slash_tmp,
+        cwd,
+        timeout_ms,
+        command,
+    } = args.command;
+
+    let policy = parse_sandbox_policy(
+        &policy,
+        network,
+        writable_root,
+        exclude_tmpdir,
+        exclude_slash_tmp,
+    )?;
+    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let timeout = Duration::from_millis(timeout_ms.clamp(1000, 600_000));
+
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("Command is required"))?;
+    let spec = CommandSpec::program(program, args.to_vec(), cwd.clone(), timeout)
+        .with_policy(policy);
+    let manager = SandboxManager::new();
+    let exec_env = manager.prepare(&spec);
+
+    let mut cmd = Command::new(exec_env.program());
+    cmd.args(exec_env.args())
+        .current_dir(&exec_env.cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &exec_env.env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to run command: {e}"))?;
+    let stdout_handle = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("stdout unavailable"))?;
+    let stderr_handle = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("stderr unavailable"))?;
+
+    let timeout = exec_env.timeout;
+    let stdout_thread = std::thread::spawn(move || {
+        let mut reader = stdout_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut reader = stderr_handle;
+        let mut buf = Vec::new();
+        let _ = reader.read_to_end(&mut buf);
+        buf
+    });
+
+    if let Some(status) = child.wait_timeout(timeout)? {
+        let stdout = stdout_thread.join().unwrap_or_default();
+        let stderr = stderr_thread.join().unwrap_or_default();
+        let stderr_str = String::from_utf8_lossy(&stderr);
+        let exit_code = status.code().unwrap_or(-1);
+        let sandbox_type = exec_env.sandbox_type;
+        let sandbox_denied = SandboxManager::was_denied(sandbox_type, exit_code, &stderr_str);
+
+        if !stdout.is_empty() {
+            print!("{}", String::from_utf8_lossy(&stdout));
+        }
+        if !stderr.is_empty() {
+            eprint!("{}", stderr_str);
+        }
+        if sandbox_denied {
+            eprintln!(
+                "{}",
+                SandboxManager::denial_message(sandbox_type, &stderr_str)
+            );
+        }
+
+        if !status.success() {
+            anyhow::bail!("Command failed with exit code {exit_code}");
+        }
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("Command timed out after {}ms", timeout.as_millis());
+    }
+    Ok(())
+}
+
+fn parse_sandbox_policy(
+    policy: &str,
+    network: bool,
+    writable_root: Vec<PathBuf>,
+    exclude_tmpdir: bool,
+    exclude_slash_tmp: bool,
+) -> Result<crate::sandbox::SandboxPolicy> {
+    use crate::sandbox::SandboxPolicy;
+
+    match policy {
+        "danger-full-access" => Ok(SandboxPolicy::DangerFullAccess),
+        "read-only" => Ok(SandboxPolicy::ReadOnly),
+        "external-sandbox" => Ok(SandboxPolicy::ExternalSandbox {
+            network_access: network,
+        }),
+        "workspace-write" => Ok(SandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_root,
+            network_access: network,
+            exclude_tmpdir,
+            exclude_slash_tmp,
+        }),
+        other => anyhow::bail!("Unknown sandbox policy: {other}"),
+    }
+}
+
 /// Run system diagnostics
 async fn run_doctor() {
     use colored::Colorize;
 
-    println!("{}", "MiniMax CLI Doctor".bold().cyan());
-    println!("{}", "==================".cyan());
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
+    let (muted_r, muted_g, muted_b) = palette::MINIMAX_SILVER_RGB;
+
+    println!(
+        "{}",
+        "MiniMax CLI Doctor".truecolor(blue_r, blue_g, blue_b).bold()
+    );
+    println!("{}", "==================".truecolor(blue_r, blue_g, blue_b));
     println!();
 
     // Version info
@@ -344,13 +623,13 @@ async fn run_doctor() {
     if config_file.exists() {
         println!(
             "  {} config.toml found at {}",
-            "✓".green(),
+            "✓".truecolor(green_r, green_g, green_b),
             config_file.display()
         );
     } else {
         println!(
             "  {} config.toml not found (will use defaults)",
-            "!".yellow()
+            "!".truecolor(orange_r, orange_g, orange_b)
         );
     }
 
@@ -358,7 +637,10 @@ async fn run_doctor() {
     println!();
     println!("{}", "API Keys:".bold());
     let has_api_key = if std::env::var("MINIMAX_API_KEY").is_ok() {
-        println!("  {} MINIMAX_API_KEY is set", "✓".green());
+        println!(
+            "  {} MINIMAX_API_KEY is set",
+            "✓".truecolor(green_r, green_g, green_b)
+        );
         true
     } else {
         let key_in_config = Config::load(None, None)
@@ -366,10 +648,16 @@ async fn run_doctor() {
             .and_then(|c| c.minimax_api_key().ok())
             .is_some();
         if key_in_config {
-            println!("  {} MiniMax API key found in config", "✓".green());
+            println!(
+                "  {} MiniMax API key found in config",
+                "✓".truecolor(green_r, green_g, green_b)
+            );
             true
         } else {
-            println!("  {} MiniMax API key not configured", "✗".red());
+            println!(
+                "  {} MiniMax API key not configured",
+                "✗".truecolor(red_r, red_g, red_b)
+            );
             println!("    Run 'minimax' to configure interactively, or set MINIMAX_API_KEY");
             false
         }
@@ -379,7 +667,10 @@ async fn run_doctor() {
     println!();
     println!("{}", "API Connectivity:".bold());
     if has_api_key {
-        print!("  {} Testing connection to MiniMax API...", "·".dimmed());
+        print!(
+            "  {} Testing connection to MiniMax API...",
+            "·".truecolor(muted_r, muted_g, muted_b)
+        );
         // Flush to show progress immediately
         use std::io::Write;
         std::io::stdout().flush().ok();
@@ -388,33 +679,84 @@ async fn run_doctor() {
             Ok(model) => {
                 println!(
                     "\r  {} API connection successful (model: {})",
-                    "✓".green(),
+                    "✓".truecolor(green_r, green_g, green_b),
                     model
                 );
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                println!("\r  {} API connection failed", "✗".red());
+                println!(
+                    "\r  {} API connection failed",
+                    "✗".truecolor(red_r, red_g, red_b)
+                );
                 // Provide helpful diagnostics based on error type
                 if error_msg.contains("401") || error_msg.contains("Unauthorized") {
-                    println!("    Invalid API key. Check your MINIMAX_API_KEY or config.toml");
+                    println!("    {}", "✗ Invalid API key".truecolor(red_r, red_g, red_b));
+                    println!("    → Check your MINIMAX_API_KEY or config.toml");
+                    println!("    → Verify your API key is active at https://platform.minimax.io");
+                    println!("    → Keys look like: sk-api-...");
                 } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
-                    println!(
-                        "    API key lacks permissions. Verify key is active at platform.minimax.io"
-                    );
+                    println!("    {}", "✗ API key lacks permissions".truecolor(red_r, red_g, red_b));
+                    println!("    → Verify your API key is active at https://platform.minimax.io");
+                    println!("    → You may need to generate a new API key");
                 } else if error_msg.contains("timeout") || error_msg.contains("Timeout") {
-                    println!("    Connection timed out. Check your network connection");
+                    println!("    {}", "✗ Connection timed out".truecolor(red_r, red_g, red_b));
+                    println!("    → Check your network connection");
+                    println!("    → Try again - this may be a temporary issue");
+                    println!("    → China users: try setting MINIMAX_BASE_URL=https://api.minimaxi.com");
                 } else if error_msg.contains("dns") || error_msg.contains("resolve") {
-                    println!("    DNS resolution failed. Check your network connection");
-                } else if error_msg.contains("connect") {
-                    println!("    Connection failed. Check firewall settings or try again");
+                    println!("    {}", "✗ DNS resolution failed".truecolor(red_r, red_g, red_b));
+                    println!("    → Check your network connection");
+                    println!("    → Verify you can reach api.minimax.io");
+                } else if error_msg.contains("certificate") || error_msg.contains("SSL") {
+                    println!("    {}", "✗ SSL/certificate error".truecolor(red_r, red_g, red_b));
+                    println!("    → Check your system clock and date");
+                    println!("    → Your SSL certificates may be outdated");
+                } else if error_msg.contains("connection refused") {
+                    println!("    {}", "✗ Connection refused".truecolor(red_r, red_g, red_b));
+                    println!("    → The API server may be down");
+                    println!("    → Check https://status.minimax.io for outages");
+                    println!("    → Try again later");
+                } else if error_msg.contains("429") {
+                    println!("    {}", "✗ Rate limited".truecolor(red_r, red_g, red_b));
+                    println!("    → You've made too many requests");
+                    println!("    → Wait a moment and try again");
                 } else {
-                    println!("    Error: {}", error_msg);
+                    // Show truncated error with helpful prefix
+                    println!("    {}", "✗ Error:".truecolor(red_r, red_g, red_b));
+                    // Truncate very long error messages
+                    let truncated = if error_msg.len() > 200 {
+                        &error_msg[..200]
+                    } else {
+                        &error_msg
+                    };
+                    println!("    {}", truncated);
+                    println!();
+                    println!("    {} Need more help?", "→".truecolor(blue_r, blue_g, blue_b).bold());
+                    println!("    → Run with -v for verbose logging");
+                    println!("    → Check https://github.com/Hmbown/MiniMax-CLI/issues");
                 }
+
+                // Quick fix section
+                println!();
+                println!("    {}", "Quick fixes:".bold());
+                println!("    → export MINIMAX_API_KEY='your-key-here'");
+                println!("    → Run {} again to verify", "minimax doctor".truecolor(blue_r, blue_g, blue_b));
             }
         }
     } else {
-        println!("  {} Skipped (no API key configured)", "·".dimmed());
+        println!(
+            "  {} Skipped (no API key configured)",
+            "·".truecolor(muted_r, muted_g, muted_b)
+        );
+        // Help users who don't have an API key
+        println!();
+        println!("    {}", "To get started:".bold());
+        println!("    1. Get an API key from https://platform.minimax.io");
+        println!("    2. Either:");
+        println!("       → Set environment variable: export MINIMAX_API_KEY='your-key'");
+        println!("       → Or create config: ~/.minimax/config.toml");
+        println!("    3. Run {} to verify", "minimax doctor".truecolor(blue_r, blue_g, blue_b));
     }
 
     // Check MCP configuration
@@ -422,16 +764,22 @@ async fn run_doctor() {
     println!("{}", "MCP Servers:".bold());
     let mcp_config = config_dir.join("mcp.json");
     if mcp_config.exists() {
-        println!("  {} mcp.json found", "✓".green());
+        println!(
+            "  {} mcp.json found",
+            "✓".truecolor(green_r, green_g, green_b)
+        );
         if let Ok(content) = std::fs::read_to_string(&mcp_config)
             && let Ok(config) = serde_json::from_str::<crate::mcp::McpConfig>(&content)
         {
             if config.servers.is_empty() {
-                println!("  {} 0 server(s) configured", "·".dimmed());
+                println!(
+                    "  {} 0 server(s) configured",
+                    "·".truecolor(muted_r, muted_g, muted_b)
+                );
             } else {
                 println!(
                     "  {} {} server(s) configured",
-                    "·".dimmed(),
+                    "·".truecolor(muted_r, muted_g, muted_b),
                     config.servers.len()
                 );
                 for name in config.servers.keys() {
@@ -440,7 +788,10 @@ async fn run_doctor() {
             }
         }
     } else {
-        println!("  {} mcp.json not found (no MCP servers)", "·".dimmed());
+        println!(
+            "  {} mcp.json not found (no MCP servers)",
+            "·".truecolor(muted_r, muted_g, muted_b)
+        );
     }
 
     // Check skills directory
@@ -453,11 +804,14 @@ async fn run_doctor() {
             .unwrap_or(0);
         println!(
             "  {} skills directory found ({} items)",
-            "✓".green(),
+            "✓".truecolor(green_r, green_g, green_b),
             skill_count
         );
     } else {
-        println!("  {} skills directory not found", "·".dimmed());
+        println!(
+            "  {} skills directory not found",
+            "·".truecolor(muted_r, muted_g, muted_b)
+        );
     }
 
     // Platform-specific checks
@@ -469,14 +823,25 @@ async fn run_doctor() {
     #[cfg(target_os = "macos")]
     {
         if std::path::Path::new("/usr/bin/sandbox-exec").exists() {
-            println!("  {} macOS sandbox available", "✓".green());
+            println!(
+                "  {} macOS sandbox available",
+                "✓".truecolor(green_r, green_g, green_b)
+            );
         } else {
-            println!("  {} macOS sandbox not available", "!".yellow());
+            println!(
+                "  {} macOS sandbox not available",
+                "!".truecolor(orange_r, orange_g, orange_b)
+            );
         }
     }
 
     println!();
-    println!("{}", "All checks complete!".green().bold());
+    println!(
+        "{}",
+        "All checks complete!"
+            .truecolor(green_r, green_g, green_b)
+            .bold()
+    );
 }
 
 /// Test API connectivity by making a minimal request
@@ -533,6 +898,11 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     use colored::Colorize;
     use session_manager::{SessionManager, format_session_line};
 
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (muted_r, muted_g, muted_b) = palette::MINIMAX_SILVER_RGB;
+
     let manager = SessionManager::default_location()?;
 
     let sessions = if let Some(query) = search {
@@ -542,19 +912,34 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     };
 
     if sessions.is_empty() {
-        println!("{}", "No sessions found.".yellow());
-        println!("Start a new session with: {}", "minimax".cyan());
+        println!(
+            "{}",
+            "No sessions found.".truecolor(orange_r, orange_g, orange_b)
+        );
+        println!(
+            "Start a new session with: {}",
+            "minimax".truecolor(blue_r, blue_g, blue_b)
+        );
         return Ok(());
     }
 
-    println!("{}", "Saved Sessions".bold().cyan());
-    println!("{}", "==============".cyan());
+    println!(
+        "{}",
+        "Saved Sessions"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
+    );
+    println!("{}", "==============".truecolor(blue_r, blue_g, blue_b));
     println!();
 
     for (i, session) in sessions.iter().take(limit).enumerate() {
         let line = format_session_line(session);
         if i == 0 {
-            println!("  {} {}", "*".green(), line);
+            println!(
+                "  {} {}",
+                "*".truecolor(green_r, green_g, green_b),
+                line
+            );
         } else {
             println!("    {line}");
         }
@@ -572,10 +957,13 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     println!();
     println!(
         "Resume with: {} {}",
-        "minimax --resume".cyan(),
-        "<session-id>".dimmed()
+        "minimax --resume".truecolor(blue_r, blue_g, blue_b),
+        "<session-id>".truecolor(muted_r, muted_g, muted_b)
     );
-    println!("Continue latest: {}", "minimax --continue".cyan());
+    println!(
+        "Continue latest: {}",
+        "minimax --continue".truecolor(blue_r, blue_g, blue_b)
+    );
 
     Ok(())
 }
@@ -585,13 +973,17 @@ fn init_project() -> Result<()> {
     use colored::Colorize;
     use project_context::create_default_agents_md;
 
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
+
     let workspace = std::env::current_dir()?;
     let agents_path = workspace.join("AGENTS.md");
 
     if agents_path.exists() {
         println!(
             "{} AGENTS.md already exists at {}",
-            "!".yellow(),
+            "!".truecolor(orange_r, orange_g, orange_b),
             agents_path.display()
         );
         return Ok(());
@@ -599,13 +991,21 @@ fn init_project() -> Result<()> {
 
     match create_default_agents_md(&workspace) {
         Ok(path) => {
-            println!("{} Created {}", "✓".green(), path.display());
+            println!(
+                "{} Created {}",
+                "✓".truecolor(green_r, green_g, green_b),
+                path.display()
+            );
             println!();
             println!("Edit this file to customize how the AI agent works with your project.");
             println!("The instructions will be loaded automatically when you run minimax.");
         }
         Err(e) => {
-            println!("{} Failed to create AGENTS.md: {}", "✗".red(), e);
+            println!(
+                "{} Failed to create AGENTS.md: {}",
+                "✗".truecolor(red_r, red_g, red_b),
+                e
+            );
         }
     }
 

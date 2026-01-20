@@ -3,12 +3,13 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use crate::models::{ContentBlock, Message};
+use crate::palette;
 
 // === Constants ===
 
@@ -28,6 +29,21 @@ pub enum HistoryCell {
     Tool(ToolCell),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptRenderOptions {
+    pub show_thinking: bool,
+    pub show_tool_details: bool,
+}
+
+impl Default for TranscriptRenderOptions {
+    fn default() -> Self {
+        Self {
+            show_thinking: true,
+            show_tool_details: true,
+        }
+    }
+}
+
 impl HistoryCell {
     /// Render the cell into a set of terminal lines.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -43,6 +59,28 @@ impl HistoryCell {
                 render_message("Thinking", summary, thinking_style(), width)
             }
             HistoryCell::Tool(cell) => cell.lines(width),
+        }
+    }
+
+    pub fn lines_with_options(
+        &self,
+        width: u16,
+        options: TranscriptRenderOptions,
+    ) -> Vec<Line<'static>> {
+        match self {
+            HistoryCell::ThinkingSummary { .. } if !options.show_thinking => Vec::new(),
+            HistoryCell::Tool(cell) if !options.show_tool_details => {
+                let mut lines = cell.lines(width);
+                if lines.len() > 2 {
+                    lines.truncate(2);
+                    lines.push(Line::from(Span::styled(
+                        "  ... details hidden (show_tool_details=off)",
+                        Style::default().fg(palette::TEXT_MUTED).italic(),
+                    )));
+                }
+                lines
+            }
+            _ => self.lines(width),
         }
     }
 
@@ -153,12 +191,12 @@ impl ExecCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let (label, color) = match self.status {
-            ToolStatus::Running => ("Running", Color::Yellow),
+            ToolStatus::Running => ("Running", palette::STATUS_WARNING),
             ToolStatus::Success => match self.source {
-                ExecSource::User => ("You ran", Color::Green),
-                ExecSource::Assistant => ("Ran", Color::Green),
+                ExecSource::User => ("You ran", palette::STATUS_SUCCESS),
+                ExecSource::Assistant => ("Ran", palette::STATUS_SUCCESS),
             },
-            ToolStatus::Failed => ("Failed", Color::Red),
+            ToolStatus::Failed => ("Failed", palette::STATUS_ERROR),
         };
         let dot = status_symbol(self.started_at, self.status);
         lines.push(Line::from(vec![
@@ -172,7 +210,7 @@ impl ExecCell {
         if let Some(interaction) = self.interaction.as_ref() {
             lines.extend(wrap_plain_line(
                 &format!("  {interaction}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
                 width,
             ));
         } else {
@@ -185,7 +223,7 @@ impl ExecCell {
             } else if self.status != ToolStatus::Running {
                 lines.push(Line::from(Span::styled(
                     "  (no output)",
-                    Style::default().fg(Color::DarkGray).italic(),
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
                 )));
             }
         }
@@ -194,7 +232,7 @@ impl ExecCell {
             let seconds = f64::from(u32::try_from(duration_ms).unwrap_or(u32::MAX)) / 1000.0;
             lines.push(Line::from(Span::styled(
                 format!("  {seconds:.2}s"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
         }
 
@@ -227,7 +265,7 @@ impl ExploringCell {
         lines.push(Line::from(Span::styled(
             header,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::MINIMAX_BLUE)
                 .add_modifier(Modifier::BOLD),
         )));
 
@@ -238,9 +276,9 @@ impl ExploringCell {
                 ToolStatus::Failed => "!!",
             };
             let style = match entry.status {
-                ToolStatus::Running => Style::default().fg(Color::Cyan),
-                ToolStatus::Success => Style::default().fg(Color::Green),
-                ToolStatus::Failed => Style::default().fg(Color::Red),
+                ToolStatus::Running => Style::default().fg(palette::MINIMAX_BLUE),
+                ToolStatus::Success => Style::default().fg(palette::STATUS_SUCCESS),
+                ToolStatus::Failed => Style::default().fg(palette::STATUS_ERROR),
             };
             let line = format!("  {} {}", prefix, entry.label);
             lines.extend(wrap_plain_line(&line, style, width));
@@ -282,7 +320,7 @@ impl PlanUpdateCell {
         lines.push(Line::from(Span::styled(
             header,
             Style::default()
-                .fg(Color::Magenta)
+                .fg(palette::MINIMAX_MAGENTA)
                 .add_modifier(Modifier::BOLD),
         )));
 
@@ -299,7 +337,7 @@ impl PlanUpdateCell {
             let line = format!("  {} {}", marker, step.step);
             lines.extend(wrap_plain_line(
                 &line,
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(palette::MINIMAX_MAGENTA),
                 width,
             ));
         }
@@ -334,9 +372,9 @@ impl PatchSummaryCell {
             ToolStatus::Failed => "Patch Failed",
         };
         let color = match self.status {
-            ToolStatus::Running => Color::Yellow,
-            ToolStatus::Success => Color::Green,
-            ToolStatus::Failed => Color::Red,
+            ToolStatus::Running => palette::STATUS_WARNING,
+            ToolStatus::Success => palette::STATUS_SUCCESS,
+            ToolStatus::Failed => palette::STATUS_ERROR,
         };
         lines.push(Line::from(Span::styled(
             header,
@@ -344,7 +382,7 @@ impl PatchSummaryCell {
         )));
         lines.extend(wrap_plain_line(
             &format!("  {}", self.path),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
             width,
         ));
         lines.extend(render_tool_output(
@@ -377,9 +415,9 @@ impl McpToolCell {
             _ => format!("Called {}", self.tool),
         };
         let color = if self.status == ToolStatus::Failed {
-            Color::Red
+            palette::STATUS_ERROR
         } else {
-            Color::Cyan
+            palette::MINIMAX_BLUE
         };
         lines.push(Line::from(Span::styled(
             header,
@@ -389,7 +427,7 @@ impl McpToolCell {
         if self.is_image {
             lines.push(Line::from(Span::styled(
                 "  (image result)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
         }
 
@@ -410,7 +448,7 @@ impl ViewImageCell {
     /// Render the image view cell into lines.
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let header = format!("Viewed Image {}", self.path.display());
-        wrap_plain_line(&header, Style::default().fg(Color::Cyan), width)
+        wrap_plain_line(&header, Style::default().fg(palette::MINIMAX_BLUE), width)
     }
 }
 
@@ -433,19 +471,19 @@ impl WebSearchCell {
         lines.push(Line::from(Span::styled(
             header,
             Style::default()
-                .fg(Color::Blue)
+                .fg(palette::MINIMAX_BLUE)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.extend(wrap_plain_line(
             &format!("  {}", self.query),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
             width,
         ));
         if let Some(summary) = self.summary.as_ref() {
             lines.extend(render_compact_kv(
                 "result:",
                 summary,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
                 width,
             ));
         }
@@ -471,9 +509,9 @@ impl GenericToolCell {
             _ => format!("Called {}", self.name),
         };
         let color = if self.status == ToolStatus::Failed {
-            Color::Red
+            palette::STATUS_ERROR
         } else {
-            Color::Cyan
+            palette::MINIMAX_BLUE
         };
         lines.push(Line::from(Span::styled(
             header,
@@ -484,15 +522,15 @@ impl GenericToolCell {
             lines.extend(render_compact_kv(
                 "args:",
                 summary,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
                 width,
             ));
         }
         if let Some(output) = self.output.as_ref() {
             let style = if self.status == ToolStatus::Failed {
-                Style::default().fg(Color::Red)
+                Style::default().fg(palette::STATUS_ERROR)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(palette::TEXT_MUTED)
             };
             lines.extend(render_compact_kv("result:", output, style, width));
         }
@@ -834,13 +872,13 @@ fn render_command(command: &str, width: u16) -> Vec<Line<'static>> {
         if count >= TOOL_COMMAND_LINE_LIMIT {
             lines.push(Line::from(Span::styled(
                 "  ...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
             break;
         }
         lines.push(Line::from(vec![
-            Span::styled("  $ ", Style::default().fg(Color::DarkGray)),
-            Span::styled(chunk, Style::default().fg(Color::White)),
+            Span::styled("  $ ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(chunk, Style::default().fg(palette::TEXT_PRIMARY)),
         ]));
     }
     lines
@@ -856,7 +894,7 @@ fn render_tool_output(output: &str, width: u16, line_limit: usize) -> Vec<Line<'
     if output.trim().is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no output)",
-            Style::default().fg(Color::DarkGray).italic(),
+            Style::default().fg(palette::TEXT_MUTED).italic(),
         )));
         return lines;
     }
@@ -871,14 +909,14 @@ fn render_tool_output(output: &str, width: u16, line_limit: usize) -> Vec<Line<'
             if omitted > 0 {
                 lines.push(Line::from(Span::styled(
                     format!("  ... +{omitted} lines"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::TEXT_MUTED),
                 )));
             }
             break;
         }
         lines.push(Line::from(vec![
-            Span::styled("  | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(line, Style::default().fg(Color::DarkGray)),
+            Span::styled("  | ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(line, Style::default().fg(palette::TEXT_MUTED)),
         ]));
     }
     lines
@@ -889,7 +927,7 @@ fn render_exec_output(output: &str, width: u16, line_limit: usize) -> Vec<Line<'
     if output.trim().is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no output)",
-            Style::default().fg(Color::DarkGray).italic(),
+            Style::default().fg(palette::TEXT_MUTED).italic(),
         )));
         return lines;
     }
@@ -903,8 +941,8 @@ fn render_exec_output(output: &str, width: u16, line_limit: usize) -> Vec<Line<'
     let head_end = total.min(line_limit);
     for line in &all_lines[..head_end] {
         lines.push(Line::from(vec![
-            Span::styled("  | ", Style::default().fg(Color::DarkGray)),
-            Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+            Span::styled("  | ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(line.to_string(), Style::default().fg(palette::TEXT_MUTED)),
         ]));
     }
 
@@ -912,20 +950,20 @@ fn render_exec_output(output: &str, width: u16, line_limit: usize) -> Vec<Line<'
         let omitted = total.saturating_sub(2 * line_limit);
         lines.push(Line::from(Span::styled(
             format!("  ... +{omitted} lines"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         )));
         let tail_start = total.saturating_sub(line_limit);
         for line in &all_lines[tail_start..] {
             lines.push(Line::from(vec![
-                Span::styled("  | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled("  | ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(line.to_string(), Style::default().fg(palette::TEXT_MUTED)),
             ]));
         }
     } else if total > head_end {
         for line in &all_lines[head_end..] {
             lines.push(Line::from(vec![
-                Span::styled("  | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled("  | ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(line.to_string(), Style::default().fg(palette::TEXT_MUTED)),
             ]));
         }
     }
@@ -1011,20 +1049,20 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 }
 
 fn user_style() -> Style {
-    Style::default().fg(Color::Rgb(120, 200, 120))
+    Style::default().fg(palette::MINIMAX_ORANGE)
 }
 
 fn assistant_style() -> Style {
-    Style::default().fg(Color::Rgb(240, 128, 100))
+    Style::default().fg(palette::MINIMAX_BLUE)
 }
 
 fn system_style() -> Style {
-    Style::default().fg(Color::DarkGray).italic()
+    Style::default().fg(palette::TEXT_MUTED).italic()
 }
 
 fn thinking_style() -> Style {
     Style::default()
-        .fg(Color::DarkGray)
+        .fg(palette::TEXT_MUTED)
         .add_modifier(Modifier::ITALIC | Modifier::DIM)
 }
 

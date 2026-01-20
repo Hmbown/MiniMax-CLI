@@ -1,6 +1,6 @@
 {
   "name": "@hmbown/minimax-cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Unofficial MiniMax CLI - downloads and runs the Rust binary",
   "keywords": ["minimax", "cli", "ai", "agent", "m2.1"],
   "homepage": "https://github.com/Hmbown/MiniMax-CLI",

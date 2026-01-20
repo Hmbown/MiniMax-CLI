@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::models::Usage;
+use crate::palette;
 use crate::utils::truncate_to_boundary;
 
 // === Command Args ===
@@ -156,7 +157,13 @@ impl SystemResources {
 
     /// Print a human-readable resource summary.
     pub fn print_info(&self) {
-        println!("{}", "System Resources".cyan().bold());
+        let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+        println!(
+            "{}",
+            "System Resources"
+                .truecolor(blue_r, blue_g, blue_b)
+                .bold()
+        );
         if let Some(mem) = self.available_memory_mb {
             let mem_f64 = f64::from(u32::try_from(mem).unwrap_or(u32::MAX));
             println!("  Available RAM: {} MB ({:.1} GB)", mem, mem_f64 / 1024.0);
@@ -693,6 +700,10 @@ pub fn session_summary(session: &RlmSession) -> String {
 #[allow(dead_code)]
 pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
     let mut session = RlmSession::default();
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (muted_r, muted_g, muted_b) = palette::MINIMAX_SILVER_RGB;
 
     match command {
         RlmCommand::Load(args) => {
@@ -704,8 +715,11 @@ pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
             let ctx = session
                 .get_context(&args.context_id)
                 .expect("context should exist after load_context");
-            println!("{}", "Context loaded successfully!".green());
-            println!("  ID: {}", ctx.id.cyan());
+            println!(
+                "{}",
+                "Context loaded successfully!".truecolor(green_r, green_g, green_b)
+            );
+            println!("  ID: {}", ctx.id.truecolor(blue_r, blue_g, blue_b));
             println!("  Source: {}", ctx.source_path.as_deref().unwrap_or("N/A"));
             println!("  Lines: {}", ctx.line_count);
             println!("  Characters: {}", ctx.char_count);
@@ -717,16 +731,31 @@ pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
             let results = ctx.search(&args.pattern, args.context_lines, args.max_results)?;
 
             if results.is_empty() {
-                println!("{}", "No matches found.".yellow());
+                println!(
+                    "{}",
+                    "No matches found.".truecolor(orange_r, orange_g, orange_b)
+                );
             } else {
-                println!("{} matches found:\n", results.len().to_string().green());
+                println!(
+                    "{} matches found:\n",
+                    results
+                        .len()
+                        .to_string()
+                        .truecolor(green_r, green_g, green_b)
+                );
                 for result in results {
-                    println!("{}", "─".repeat(60).dimmed());
+                    println!(
+                        "{}",
+                        "─".repeat(60).truecolor(muted_r, muted_g, muted_b)
+                    );
                     for line in &result.context {
                         println!("{line}");
                     }
                 }
-                println!("{}", "─".repeat(60).dimmed());
+                println!(
+                    "{}",
+                    "─".repeat(60).truecolor(muted_r, muted_g, muted_b)
+                );
             }
         }
         RlmCommand::Exec(args) => {
@@ -740,7 +769,12 @@ pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
             if let Some(id) = args.context_id {
                 println!("Context '{id}' status: (no persistent session)");
             } else {
-                println!("{}", "RLM Session Status".cyan().bold());
+                println!(
+                    "{}",
+                    "RLM Session Status"
+                        .truecolor(blue_r, blue_g, blue_b)
+                        .bold()
+                );
                 println!("Note: For persistent sessions, use 'rlm repl' or save/load session.");
             }
         }
@@ -1049,7 +1083,17 @@ fn format_lines(ctx: &RlmContext, start_line: usize, end_line: Option<usize>) ->
 }
 
 fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<()> {
-    println!("{}", "MiniMax RLM Sandbox".bold().cyan());
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
+
+    println!(
+        "{}",
+        "MiniMax RLM Sandbox"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
+    );
     println!("Recursive Language Model - Local REPL Environment");
     println!("Type expressions or /help for commands.\n");
 
@@ -1070,7 +1114,10 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
         let ctx = session
             .get_context(context_id)
             .expect("context should exist after load_context");
-        println!("{}", "Context loaded!".green());
+        println!(
+            "{}",
+            "Context loaded!".truecolor(green_r, green_g, green_b)
+        );
         println!("  Lines: {} | Chars: {}\n", ctx.line_count, ctx.char_count);
     }
 
@@ -1081,7 +1128,10 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
     let _ = editor.load_history(&history_path);
 
     loop {
-        let prompt = format!("{}> ", "rlm".cyan());
+        let prompt = format!(
+            "{}> ",
+            "rlm".truecolor(blue_r, blue_g, blue_b)
+        );
         match editor.readline(&prompt) {
             Ok(line) => {
                 let input = line.trim();
@@ -1113,11 +1163,15 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
                             let ctx = session
                                 .get_context(context_id)
                                 .expect("context should exist after load_context");
-                            println!("{}", "Loaded!".green());
+                            println!("{}", "Loaded!".truecolor(green_r, green_g, green_b));
                             println!("  Lines: {} | Chars: {}", ctx.line_count, ctx.char_count);
                         }
                         Err(e) => {
-                            println!("{}: {}", "Error".red(), e);
+                            println!(
+                                "{}: {}",
+                                "Error".truecolor(red_r, red_g, red_b),
+                                e
+                            );
                         }
                     }
                     continue;
@@ -1135,16 +1189,27 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
                 if let Some(ctx) = session.get_context(context_id) {
                     match eval_expr(ctx, input) {
                         Ok(result) => println!("{result}"),
-                        Err(e) => println!("{}: {}", "Error".red(), e),
+                        Err(e) => println!(
+                            "{}: {}",
+                            "Error".truecolor(red_r, red_g, red_b),
+                            e
+                        ),
                     }
                 } else {
-                    println!("{}: No context loaded. Use /load <path>", "Error".yellow());
+                    println!(
+                        "{}: No context loaded. Use /load <path>",
+                        "Error".truecolor(orange_r, orange_g, orange_b)
+                    );
                 }
             }
             Err(ReadlineError::Interrupted) => {}
             Err(ReadlineError::Eof) => break,
             Err(err) => {
-                println!("{}: {}", "Error".red(), err);
+                println!(
+                    "{}: {}",
+                    "Error".truecolor(red_r, red_g, red_b),
+                    err
+                );
                 break;
             }
         }
@@ -1155,7 +1220,13 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
 }
 
 fn print_repl_help() {
-    println!("{}", "RLM Sandbox Commands".cyan().bold());
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    println!(
+        "{}",
+        "RLM Sandbox Commands"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
+    );
     println!();
     println!("  /load <path>   Load a file into context");
     println!("  /save <path>   Save session to file");
@@ -1163,7 +1234,10 @@ fn print_repl_help() {
     println!("  /help          Show this help");
     println!("  /exit          Exit REPL");
     println!();
-    println!("{}", "Expressions".cyan().bold());
+    println!(
+        "{}",
+        "Expressions".truecolor(blue_r, blue_g, blue_b).bold()
+    );
     println!();
     println!("  len              Character count");
     println!("  line_count       Line count");
@@ -1179,7 +1253,11 @@ fn print_repl_help() {
 }
 
 fn print_status(session: &RlmSession) {
-    println!("{}", "Session Status".cyan().bold());
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    println!(
+        "{}",
+        "Session Status".truecolor(blue_r, blue_g, blue_b).bold()
+    );
     println!("  Active context: {}", session.active_context);
     println!("  Loaded contexts: {}", session.contexts.len());
     for (id, ctx) in &session.contexts {

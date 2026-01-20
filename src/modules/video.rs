@@ -10,6 +10,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::client::MiniMaxClient;
 use crate::modules::files::retrieve_file;
+use crate::palette;
 use crate::ui::spinner;
 use crate::utils::{
     extension_from_url, output_path, pretty_json, timestamped_filename, write_bytes,
@@ -107,7 +108,8 @@ pub async fn generate(
     let task_id = extract_task_id(&response);
 
     if let Some(path) = download_video_if_available(client, &response, &options.output_dir).await? {
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
         return Ok(VideoGenerateResult {
             task_id,
             response_path: None,
@@ -164,7 +166,8 @@ pub async fn generate(
     }
 
     if let Some(path) = &video_path {
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
     }
 
     Ok(VideoGenerateResult {

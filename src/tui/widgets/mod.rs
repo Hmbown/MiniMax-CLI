@@ -1,19 +1,26 @@
+mod header;
 mod renderable;
 
+pub use header::{HeaderData, HeaderWidget};
 pub use renderable::Renderable;
 
+use crate::palette;
 use crate::tui::app::{App, AppMode};
 use crate::tui::approval::{ApprovalRequest, ToolCategory};
 use crate::tui::scrolling::TranscriptScroll;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    prelude::Stylize,
-    style::{Color, Modifier, Style},
+    prelude::{StatefulWidget, Stylize},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState as RatatuiScrollbarState, Widget, Wrap,
+    },
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub struct ChatWidget {
     content_area: Rect,
@@ -46,8 +53,13 @@ impl ChatWidget {
             });
         }
 
-        app.transcript_cache
-            .ensure(&app.history, content_area.width.max(1), app.history_version);
+        let render_options = app.transcript_render_options();
+        app.transcript_cache.ensure(
+            &app.history,
+            content_area.width.max(1),
+            app.history_version,
+            render_options,
+        );
 
         let total_lines = app.transcript_cache.total_lines();
         let visible_lines = content_area.height as usize;
@@ -145,6 +157,7 @@ impl Renderable for ComposerWidget<'_> {
         let prompt_width_u16 = u16::try_from(prompt_width).unwrap_or(u16::MAX);
         let content_width = usize::from(area.width.saturating_sub(prompt_width_u16).max(1));
         let max_height = usize::from(area.height);
+        let continuation = " ".repeat(prompt_width);
 
         let (visible_lines, _cursor_row, _cursor_col) = layout_input(
             &self.app.input,
@@ -153,7 +166,7 @@ impl Renderable for ComposerWidget<'_> {
             max_height,
         );
 
-        let background = Style::default().bg(Color::Rgb(24, 32, 24));
+        let background = Style::default().bg(self.app.ui_theme.composer_bg);
         let block = Block::default().style(background);
         block.render(area, buf);
 
@@ -169,15 +182,22 @@ impl Renderable for ComposerWidget<'_> {
                 "Type a message or /help for commands..."
             };
             lines.push(Line::from(vec![
-                Span::styled(self.prompt, Style::default().fg(Color::Green).bold()),
-                Span::styled(placeholder, Style::default().fg(Color::DarkGray).italic()),
+                Span::styled(self.prompt, Style::default().fg(palette::MINIMAX_BLUE).bold()),
+                Span::styled(
+                    placeholder,
+                    Style::default().fg(palette::TEXT_MUTED).italic(),
+                ),
             ]));
         } else {
             for (idx, line) in visible_lines.iter().enumerate() {
-                let prefix = if idx == 0 { self.prompt } else { "  " };
+                let prefix = if idx == 0 {
+                    self.prompt
+                } else {
+                    continuation.as_str()
+                };
                 lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Green).bold()),
-                    Span::styled(line.clone(), Style::default().fg(Color::White)),
+                    Span::styled(prefix, Style::default().fg(palette::MINIMAX_BLUE).bold()),
+                    Span::styled(line.clone(), Style::default().fg(palette::TEXT_PRIMARY)),
                 ]));
             }
         }
@@ -249,17 +269,17 @@ impl Renderable for ApprovalWidget<'_> {
                 Span::styled(
                     &self.request.tool_name,
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(palette::MINIMAX_BLUE)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
         ];
 
         let category_label = match self.request.category {
-            ToolCategory::Safe => ("Safe", Color::Green),
-            ToolCategory::FileWrite => ("File Write", Color::Yellow),
-            ToolCategory::Shell => ("Shell Command", Color::Red),
-            ToolCategory::PaidMultimedia => ("Paid API", Color::Magenta),
+            ToolCategory::Safe => ("Safe", palette::STATUS_SUCCESS),
+            ToolCategory::FileWrite => ("File Write", palette::STATUS_WARNING),
+            ToolCategory::Shell => ("Shell Command", palette::STATUS_ERROR),
+            ToolCategory::PaidMultimedia => ("Paid API", palette::MINIMAX_MAGENTA),
         };
         lines.push(Line::from(vec![
             Span::raw("  Type: "),
@@ -278,19 +298,19 @@ impl Renderable for ApprovalWidget<'_> {
                 Span::styled(
                     cost.display(),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(palette::STATUS_WARNING)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]));
             lines.push(Line::from(Span::styled(
                 format!("  {}", &cost.breakdown),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
         } else {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  No cost (free operation)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )));
         }
 
@@ -299,7 +319,7 @@ impl Renderable for ApprovalWidget<'_> {
         let params_truncated = crate::utils::truncate_with_ellipsis(&params_str, 50, "...");
         lines.push(Line::from(Span::styled(
             format!("  Params: {params_truncated}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         )));
 
         lines.push(Line::from(""));
@@ -315,7 +335,7 @@ impl Renderable for ApprovalWidget<'_> {
             let is_selected = i == self.selected;
             let style = if is_selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::MINIMAX_BLUE)
                     .add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
@@ -323,7 +343,10 @@ impl Renderable for ApprovalWidget<'_> {
 
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("[{key}] "), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("[{key}] "),
+                    Style::default().fg(palette::STATUS_SUCCESS),
+                ),
                 Span::styled(*label, style),
             ]));
         }
@@ -332,7 +355,7 @@ impl Renderable for ApprovalWidget<'_> {
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(palette::STATUS_WARNING));
 
         let paragraph = Paragraph::new(lines)
             .block(block)
@@ -366,7 +389,7 @@ fn apply_selection(lines: &mut [Line<'static>], top: usize, app: &App) {
         return;
     };
 
-    let selection_style = Style::default().bg(Color::Rgb(60, 60, 80));
+    let selection_style = Style::default().bg(app.ui_theme.selection_bg);
 
     for (idx, line) in lines.iter_mut().enumerate() {
         let line_index = top + idx;
@@ -449,30 +472,11 @@ fn render_scrollbar(buf: &mut Buffer, area: Rect, top: usize, visible: usize, to
         return;
     }
 
-    let height = usize::from(area.height);
-    let max_start = total.saturating_sub(visible).max(1);
-    let thumb_height = visible
-        .saturating_mul(height)
-        .div_ceil(total)
-        .clamp(1, height);
-    let track = height.saturating_sub(thumb_height).max(1);
-    let thumb_start = (top.saturating_mul(track) + max_start / 2) / max_start;
-
-    let mut lines = Vec::new();
-    for row in 0..height {
-        let ch = if row >= thumb_start && row < thumb_start + thumb_height {
-            "#"
-        } else {
-            "|"
-        };
-        lines.push(Line::from(Span::styled(
-            ch,
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    let scrollbar = Paragraph::new(lines);
-    scrollbar.render(area, buf);
+    let mut state = RatatuiScrollbarState::new(total.saturating_sub(visible)).position(top);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .track_style(Style::default().fg(palette::TEXT_MUTED))
+        .thumb_style(Style::default().fg(palette::TEXT_MUTED));
+    scrollbar.render(area, buf, &mut state);
 }
 
 fn composer_height(input: &str, width: u16, available_height: u16, prompt: &str) -> u16 {
@@ -524,28 +528,41 @@ fn layout_input(
 fn cursor_row_col(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     let mut row = 0usize;
     let mut col = 0usize;
+    let mut char_idx = 0usize;
 
-    for (char_idx, ch) in input.chars().enumerate() {
+    for grapheme in input.graphemes(true) {
         if char_idx >= cursor {
             break;
         }
 
-        if ch == '\n' {
+        let grapheme_chars = grapheme.chars().count();
+        let next_char_idx = char_idx.saturating_add(grapheme_chars);
+        let cursor_inside = cursor < next_char_idx;
+
+        if grapheme == "\n" {
             row += 1;
             col = 0;
+            char_idx = next_char_idx;
+            if cursor_inside {
+                break;
+            }
             continue;
         }
 
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(1);
-        if col + ch_width > width {
+        let grapheme_width = grapheme.width();
+        if col + grapheme_width > width && col != 0 {
             row += 1;
             col = 0;
         }
-        col += ch_width;
+        col += grapheme_width;
         if col >= width {
             row += 1;
             col = 0;
         }
+        if cursor_inside {
+            break;
+        }
+        char_idx = next_char_idx;
     }
 
     (row, col)
@@ -566,10 +583,6 @@ fn wrap_input_lines(input: &str, width: usize) -> Vec<String> {
         }
     }
 
-    if input.ends_with('\n') {
-        lines.push(String::new());
-    }
-
     lines
 }
 
@@ -585,22 +598,28 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current = String::new();
     let mut current_width = 0;
 
-    for word in text.split_whitespace() {
-        let word_width = UnicodeWidthStr::width(word);
-        if current_width == 0 {
-            current.push_str(word);
-            current_width = word_width;
+    for grapheme in text.graphemes(true) {
+        if grapheme == "\n" {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
             continue;
         }
 
-        if current_width + 1 + word_width <= width {
-            current.push(' ');
-            current.push_str(word);
-            current_width += 1 + word_width;
-        } else {
+        let grapheme_width = grapheme.width();
+        if current_width + grapheme_width > width && current_width != 0 {
             lines.push(current);
-            current = word.to_string();
-            current_width = word_width;
+            current = String::new();
+            current_width = 0;
+        }
+
+        current.push_str(grapheme);
+        current_width += grapheme_width;
+
+        if current_width >= width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
         }
     }
 

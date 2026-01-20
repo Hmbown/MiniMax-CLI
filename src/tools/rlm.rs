@@ -1,11 +1,14 @@
 //! Tools for RLM mode: evaluating expressions and issuing sub-queries.
+//!
+//! Implements recursive sub-queries per the RLM paper, with depth limiting
+//! to prevent infinite recursion.
 
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::client::AnthropicClient;
-use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Usage};
+use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool, Usage};
 use crate::rlm::{
     RlmContext, SharedRlmSession, context_id_from_path, eval_expr_mut, session_summary,
     unique_context_id,
@@ -20,6 +23,11 @@ const MAX_QUERY_MAX_TOKENS: u32 = 8192;
 const MAX_EXEC_OUTPUT_CHARS: usize = 12_000;
 const MAX_QUERY_CHARS: usize = 400_000;
 const DEFAULT_AUTO_CHUNK_MAX_CHARS: usize = 20_000;
+
+/// Maximum recursion depth for RLM sub-calls (per RLM paper)
+const MAX_RECURSION_DEPTH: u32 = 3;
+/// Maximum tool iterations within a single sub-call
+const MAX_TOOL_ITERATIONS: u32 = 10;
 
 fn normalize_load_path(raw: &str) -> Result<String, ToolError> {
     let trimmed = raw.trim();
@@ -269,10 +277,12 @@ impl ToolSpec for RlmStatusTool {
 }
 
 /// Execute a sub-query against a chunk of the active context.
+/// Supports recursive sub-calls per the RLM paper with depth limiting.
 pub struct RlmQueryTool {
     session: SharedRlmSession,
     client: Option<AnthropicClient>,
     model: String,
+    current_depth: u32,
 }
 
 impl RlmQueryTool {
@@ -282,7 +292,23 @@ impl RlmQueryTool {
             session,
             client,
             model,
+            current_depth: 0,
         }
+    }
+
+    /// Create a sub-query tool at increased depth for recursive calls
+    fn with_depth(&self, depth: u32) -> Self {
+        Self {
+            session: self.session.clone(),
+            client: self.client.clone(),
+            model: self.model.clone(),
+            current_depth: depth,
+        }
+    }
+
+    /// Check if recursive sub-calls are allowed at current depth
+    fn can_recurse(&self) -> bool {
+        self.current_depth < MAX_RECURSION_DEPTH
     }
 }
 
@@ -487,49 +513,188 @@ impl ToolSpec for RlmQueryTool {
             )));
         }
 
-        let request = MessageRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![ContentBlock::Text {
-                    text: prompt.clone(),
-                    cache_control: None,
-                }],
-            }],
-            max_tokens,
-            system: Some(SystemPrompt::Text(rlm_subcall_system_prompt(mode))),
-            tools: None,
-            tool_choice: None,
-            metadata: None,
-            thinking: None,
-            stream: Some(false),
-            temperature: None,
-            top_p: None,
+        // Build tools for recursive sub-calls if depth allows (per RLM paper)
+        let tools = if self.can_recurse() {
+            Some(build_rlm_tools_for_subcall())
+        } else {
+            None
         };
 
-        let response = client
-            .create_message(request)
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("RLM query failed: {e}")))?;
+        let mut messages = vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: prompt.clone(),
+                cache_control: None,
+            }],
+        }];
 
-        let response_text = extract_text(&response.content);
+        let mut total_input_tokens = 0u32;
+        let mut total_output_tokens = 0u32;
+        let mut iterations = 0u32;
+
+        // Agentic loop: handle tool calls recursively
+        let final_response_text = loop {
+            iterations += 1;
+            if iterations > MAX_TOOL_ITERATIONS {
+                return Err(ToolError::execution_failed(
+                    "RLM sub-call exceeded maximum tool iterations",
+                ));
+            }
+
+            let request = MessageRequest {
+                model: self.model.clone(),
+                messages: messages.clone(),
+                max_tokens,
+                system: Some(SystemPrompt::Text(rlm_subcall_system_prompt(
+                    mode,
+                    self.can_recurse(),
+                ))),
+                tools: tools.clone(),
+                tool_choice: None,
+                metadata: None,
+                thinking: None,
+                stream: Some(false),
+                temperature: None,
+                top_p: None,
+            };
+
+            let response = client
+                .create_message(request)
+                .await
+                .map_err(|e| ToolError::execution_failed(format!("RLM query failed: {e}")))?;
+
+            total_input_tokens += response.usage.input_tokens;
+            total_output_tokens += response.usage.output_tokens;
+
+            // Check for tool use in response
+            let tool_uses: Vec<_> = response
+                .content
+                .iter()
+                .filter_map(|block| {
+                    if let ContentBlock::ToolUse { id, name, input } = block {
+                        Some((id.clone(), name.clone(), input.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if tool_uses.is_empty() {
+                // No tool calls - extract final response
+                break extract_text(&response.content);
+            }
+
+            // Execute tool calls and continue conversation
+            let mut tool_results = Vec::new();
+            for (tool_id, tool_name, tool_input) in tool_uses {
+                let result = self
+                    .execute_recursive_tool(&tool_name, &tool_input, &used_context_id)
+                    .await;
+                let result_text = match result {
+                    Ok(text) => text,
+                    Err(e) => format!("Error: {e}"),
+                };
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: tool_id,
+                    content: result_text,
+                });
+            }
+
+            // Add assistant response and tool results to conversation
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: response.content.clone(),
+            });
+            messages.push(Message {
+                role: "user".to_string(),
+                content: tool_results,
+            });
+        };
+
         self.record_usage(
             &used_context_id,
-            &response.usage,
+            &Usage {
+                input_tokens: total_input_tokens,
+                output_tokens: total_output_tokens,
+            },
             prompt.len(),
-            response_text.len(),
-            &response_text,
+            final_response_text.len(),
+            &final_response_text,
             store_as,
         );
 
-        let mut result = ToolResult::success(response_text);
+        let mut result = ToolResult::success(final_response_text);
         result.metadata = Some(json!({
             "context_id": used_context_id,
             "batch_count": batch_count,
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "depth": self.current_depth,
+            "iterations": iterations,
         }));
         Ok(result)
+    }
+}
+
+impl RlmQueryTool {
+    /// Execute a tool call from within a recursive sub-call
+    async fn execute_recursive_tool(
+        &self,
+        tool_name: &str,
+        input: &Value,
+        context_id: &str,
+    ) -> Result<String, ToolError> {
+        match tool_name {
+            "rlm_exec" => {
+                let code = input
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::invalid_input("rlm_exec requires 'code' parameter"))?;
+
+                let ctx_id = input
+                    .get("context_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(context_id);
+
+                let mut session = self
+                    .session
+                    .lock()
+                    .map_err(|_| ToolError::execution_failed("Failed to lock RLM session"))?;
+
+                let ctx = session.get_context_mut(ctx_id).ok_or_else(|| {
+                    ToolError::invalid_input(format!("Context '{ctx_id}' not loaded"))
+                })?;
+
+                let output = eval_script_mut(ctx, code)
+                    .map_err(|e| ToolError::execution_failed(e.to_string()))?;
+
+                let truncated = if output.len() > MAX_EXEC_OUTPUT_CHARS {
+                    let snippet = truncate_to_boundary(&output, MAX_EXEC_OUTPUT_CHARS);
+                    format!(
+                        "{}\n\n[output truncated to {} chars]",
+                        snippet, MAX_EXEC_OUTPUT_CHARS
+                    )
+                } else {
+                    output
+                };
+
+                Ok(truncated)
+            }
+            "rlm_query" => {
+                // Recursive sub-query at increased depth
+                let sub_tool = self.with_depth(self.current_depth + 1);
+
+                // Build a minimal ToolContext for the recursive call
+                let dummy_context = crate::tools::spec::ToolContext::new(std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+                let result = sub_tool.execute(input.clone(), &dummy_context).await?;
+                Ok(result.content)
+            }
+            _ => Err(ToolError::not_available(format!(
+                "Unknown tool in RLM sub-call: {tool_name}"
+            ))),
+        }
     }
 }
 
@@ -734,15 +899,79 @@ fn rlm_subcall_prompt(mode: &str, batch: bool) -> &'static str {
     }
 }
 
-fn rlm_subcall_system_prompt(mode: &str) -> String {
+fn rlm_subcall_system_prompt(mode: &str, has_tools: bool) -> String {
     let mut prompt = String::from(
         "You are an RLM sub-call. Use ONLY the provided context. Respond concisely.\n\n\
 Output format:\n- Use FINAL: <answer> for the final response.\n- Use FINAL_VAR(name): <value> to store buffer values if needed.\n",
     );
+    if has_tools {
+        prompt.push_str(
+            "\nYou have access to RLM tools for recursive analysis:\n\
+             - rlm_exec: Execute expressions to explore context (lines, search, chunk, etc.)\n\
+             - rlm_query: Make recursive sub-queries on specific chunks\n\n\
+             Use tools when you need to examine more context or make focused sub-queries.\n",
+        );
+    }
     if mode == "verify" {
         prompt.push_str("\nVerification mode: check for contradictions or missing evidence.");
     }
     prompt
+}
+
+/// Build tool definitions for recursive RLM sub-calls
+fn build_rlm_tools_for_subcall() -> Vec<Tool> {
+    vec![
+        Tool {
+            name: "rlm_exec".to_string(),
+            description: "Execute RLM expressions: len, line_count, lines(start, end), search(pattern), chunk(size, overlap), chunk_auto(max_chars), get(var), set(var, value)".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "RLM expression(s) to evaluate"
+                    },
+                    "context_id": {
+                        "type": "string",
+                        "description": "Optional context id"
+                    }
+                },
+                "required": ["code"]
+            }),
+            cache_control: None,
+        },
+        Tool {
+            name: "rlm_query".to_string(),
+            description: "Make a recursive sub-query on a specific chunk of context. Use for focused analysis of sections.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Question to answer about the chunk"
+                    },
+                    "chunk_index": {
+                        "type": "integer",
+                        "description": "Chunk index from chunk() output"
+                    },
+                    "line_start": {
+                        "type": "integer",
+                        "description": "Start line (1-based)"
+                    },
+                    "line_end": {
+                        "type": "integer",
+                        "description": "End line (1-based)"
+                    },
+                    "section_index": {
+                        "type": "integer",
+                        "description": "Section index from chunk_sections()"
+                    }
+                },
+                "required": ["query"]
+            }),
+            cache_control: None,
+        },
+    ]
 }
 
 fn truncate_to_boundary(text: &str, max: usize) -> &str {

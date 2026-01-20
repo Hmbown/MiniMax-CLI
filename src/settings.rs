@@ -19,7 +19,7 @@ pub struct Settings {
     pub show_thinking: bool,
     /// Show detailed tool output
     pub show_tool_details: bool,
-    /// Default mode: "normal", "agent", "plan", "yolo", "rlm"
+    /// Default mode: "normal", "agent", "plan", "yolo", "rlm", "duo"
     pub default_mode: String,
     /// Sidebar width as percentage of terminal width
     pub sidebar_width_percent: u16,
@@ -106,9 +106,9 @@ impl Settings {
             }
             "default_mode" | "mode" => {
                 let normalized = if value == "edit" { "normal" } else { value };
-                if !["normal", "agent", "plan", "yolo", "rlm"].contains(&normalized) {
+                if !["normal", "agent", "plan", "yolo", "rlm", "duo"].contains(&normalized) {
                     anyhow::bail!(
-                        "Failed to update setting: invalid mode '{value}'. Expected: normal, agent, plan, yolo, rlm."
+                        "Failed to update setting: invalid mode '{value}'. Expected: normal, agent, plan, yolo, rlm, duo."
                     );
                 }
                 self.default_mode = normalized.to_string();
@@ -182,7 +182,7 @@ impl Settings {
             ("show_tool_details", "Show detailed tool output: on/off"),
             (
                 "default_mode",
-                "Default mode: normal, agent, plan, yolo, rlm",
+                "Default mode: normal, agent, plan, yolo, rlm, duo",
             ),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             ("max_history", "Max input history entries"),

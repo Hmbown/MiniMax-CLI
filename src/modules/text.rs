@@ -21,6 +21,7 @@ use crate::models::{
     CacheControl, ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent,
     SystemBlock, SystemPrompt, Tool, Usage,
 };
+use crate::palette;
 use crate::utils::pretty_json;
 
 // === Types ===
@@ -184,6 +185,9 @@ async fn process_anthropic_turn(
         top_p: options.top_p,
     };
 
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+
     if options.stream {
         let stream = client.create_message_stream(request).await?;
         tokio::pin!(stream);
@@ -204,7 +208,12 @@ async fn process_anthropic_turn(
                     ContentBlockStart::Thinking { .. } => {
                         is_thinking = true;
                         block_types.insert(index, "thinking".to_string());
-                        print!("{}\nThinking 💭\n", "".yellow().dimmed());
+                        print!(
+                            "\n{}\n",
+                            "Thinking 💭"
+                                .truecolor(orange_r, orange_g, orange_b)
+                                .dimmed()
+                        );
                     }
                     ContentBlockStart::Text { .. } => {
                         if is_thinking {
@@ -216,12 +225,23 @@ async fn process_anthropic_turn(
                     ContentBlockStart::ToolUse { id, name, .. } => {
                         block_types.insert(index, "tool_use".to_string());
                         tool_blocks.insert(index, (id, name.clone(), String::new()));
-                        println!("{} {}", "Tool Call:".blue().bold(), name.blue().bold());
+                        println!(
+                            "{} {}",
+                            "Tool Call:"
+                                .truecolor(blue_r, blue_g, blue_b)
+                                .bold(),
+                            name.truecolor(blue_r, blue_g, blue_b).bold()
+                        );
                     }
                 },
                 StreamEvent::ContentBlockDelta { index, delta } => match delta {
                     Delta::ThinkingDelta { thinking } => {
-                        print!("{}", thinking.yellow().dimmed());
+                        print!(
+                            "{}",
+                            thinking
+                                .truecolor(orange_r, orange_g, orange_b)
+                                .dimmed()
+                        );
                         io::stdout().flush()?;
                         current_thinking.push_str(&thinking);
                     }
@@ -242,11 +262,24 @@ async fn process_anthropic_turn(
                         && let Some((_id, name, json_str)) = tool_blocks.get(&index)
                     {
                         if let Ok(parsed) = serde_json::from_str::<Value>(json_str) {
-                            println!("{} {}", "Tool Input:".blue(), pretty_json(&parsed));
+                            println!(
+                                "{} {}",
+                                "Tool Input:".truecolor(blue_r, blue_g, blue_b),
+                                pretty_json(&parsed)
+                            );
                         } else if !json_str.is_empty() {
-                            println!("{} {}", "Tool Input:".blue(), json_str);
+                            println!(
+                                "{} {}",
+                                "Tool Input:".truecolor(blue_r, blue_g, blue_b),
+                                json_str
+                            );
                         }
-                        println!("{}", format!("Tool End: {name}").blue().dimmed());
+                        println!(
+                            "{}",
+                            format!("Tool End: {name}")
+                                .truecolor(blue_r, blue_g, blue_b)
+                                .dimmed()
+                        );
                     }
                 }
                 StreamEvent::MessageDelta {
@@ -289,14 +322,30 @@ async fn process_anthropic_turn(
         for block in &response.content {
             match block {
                 ContentBlock::Thinking { thinking } => {
-                    println!("{}", "\nThinking 💭".yellow().dimmed());
-                    println!("{}", thinking.yellow().dimmed());
+                    println!(
+                        "{}",
+                        "\nThinking 💭"
+                            .truecolor(orange_r, orange_g, orange_b)
+                            .dimmed()
+                    );
+                    println!(
+                        "{}",
+                        thinking
+                            .truecolor(orange_r, orange_g, orange_b)
+                            .dimmed()
+                    );
                 }
                 ContentBlock::Text { text, .. } => {
                     println!("{text}");
                 }
                 ContentBlock::ToolUse { name, input, .. } => {
-                    println!("{} {}", "Tool Call:".blue().bold(), name.blue().bold());
+                    println!(
+                        "{} {}",
+                        "Tool Call:"
+                            .truecolor(blue_r, blue_g, blue_b)
+                            .bold(),
+                        name.truecolor(blue_r, blue_g, blue_b).bold()
+                    );
                     println!("{}", pretty_json(input));
                 }
                 ContentBlock::ToolResult { content, .. } => {
@@ -508,13 +557,18 @@ fn handle_command_official(
 }
 
 fn print_banner(mode: &str) {
-    println!("{}", "MiniMax CLI".bold().cyan());
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    println!("{}", "MiniMax CLI".truecolor(blue_r, blue_g, blue_b).bold());
     println!("Mode: {mode}");
     println!("Type /help for commands. Use /exit to quit.\n");
 }
 
 fn print_help() {
-    println!("{}", "Commands:".yellow().bold());
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    println!(
+        "{}",
+        "Commands:".truecolor(orange_r, orange_g, orange_b).bold()
+    );
     println!("  /help     Show this help");
     println!("  /clear    Clear history (keeps system prompt)");
     println!("  /history  Show message count");
@@ -524,9 +578,14 @@ fn print_help() {
 
 fn print_session_info(options: &TextChatOptions, messages: usize, tools: usize) {
     let width = 56usize;
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
     let header = "Session Info";
     println!("┌{}┐", "─".repeat(width));
-    println!("│{:^width$}│", header.blue().bold(), width = width);
+    println!(
+        "│{:^width$}│",
+        header.truecolor(blue_r, blue_g, blue_b).bold(),
+        width = width
+    );
     println!("├{}┤", "─".repeat(width));
     println!(
         "│ {:<width$}│",
@@ -554,7 +613,13 @@ fn print_stats(stats: &SessionStats) {
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
 
-    println!("{}", "Session Stats".yellow().bold());
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    println!(
+        "{}",
+        "Session Stats"
+            .truecolor(orange_r, orange_g, orange_b)
+            .bold()
+    );
     println!("  Duration: {hours:02}:{minutes:02}:{secs:02}");
     println!("  Input tokens: {}", stats.input_tokens);
     println!("  Output tokens: {}", stats.output_tokens);
@@ -700,7 +765,12 @@ async fn handle_line_anthropic(
         return Ok(false);
     }
     if let Err(error) = process_anthropic_turn(client, options, messages, input, stats).await {
-        eprintln!("{} {}", "Error:".red().bold(), error);
+        let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
+        eprintln!(
+            "{} {}",
+            "Error:".truecolor(red_r, red_g, red_b).bold(),
+            error
+        );
     }
     Ok(false)
 }
@@ -724,7 +794,12 @@ async fn handle_line_official(
         return Ok(false);
     }
     if let Err(error) = process_official_turn(client, options, messages, input, stats).await {
-        eprintln!("{} {}", "Error:".red().bold(), error);
+        let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
+        eprintln!(
+            "{} {}",
+            "Error:".truecolor(red_r, red_g, red_b).bold(),
+            error
+        );
     }
     Ok(false)
 }

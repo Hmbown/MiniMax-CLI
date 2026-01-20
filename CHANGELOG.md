@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-01-20
+
+### Added
+- Recursive RLM sub-call support with depth limits and tool-aware prompts
+- Feature flag system with CLI toggles and config support
+- Execpolicy check subcommand and sandbox runner
+- Responses API proxy for controlled upstream access
+
+### Changed
+- New MiniMax palette and header bar for consistent UI styling
+- Shared todo/plan state across agent runs
+
+### Fixed
+- Apply-patch now tracks multi-hunk line drift more reliably
+
 ## [0.2.1] - 2026-01-19
 
 ### Added
@@ -91,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.8...v0.1.9

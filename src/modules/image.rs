@@ -8,6 +8,7 @@ use colored::Colorize;
 use serde_json::{Value, json};
 
 use crate::client::MiniMaxClient;
+use crate::palette;
 use crate::utils::{
     extension_from_url, output_path, pretty_json, timestamped_filename, write_bytes,
 };
@@ -169,7 +170,8 @@ pub async fn generate(
         };
         let path = output_path(&options.output_dir, &filename);
         write_bytes(&path, &bytes.0)?;
-        println!("{} {}", "Saved".green().bold(), path.display());
+        let (r, g, b) = palette::MINIMAX_GREEN_RGB;
+        println!("{} {}", "Saved".truecolor(r, g, b).bold(), path.display());
         saved_paths.push(path);
     }
 

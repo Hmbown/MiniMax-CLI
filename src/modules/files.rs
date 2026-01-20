@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use tokio_util::io::ReaderStream;
 
 use crate::client::MiniMaxClient;
+use crate::palette;
 use crate::ui::progress_bar;
 use crate::utils::{output_path, pretty_json, write_bytes};
 
@@ -200,7 +201,10 @@ pub async fn retrieve_file(
 
     println!(
         "{}",
-        "Failed to retrieve file: no download URL returned.".yellow()
+        {
+            let (r, g, b) = palette::MINIMAX_ORANGE_RGB;
+            "Failed to retrieve file: no download URL returned.".truecolor(r, g, b)
+        }
     );
     println!("{}", pretty_json(&response));
     Ok(None)

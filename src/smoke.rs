@@ -8,6 +8,7 @@ use colored::Colorize;
 
 use crate::client::MiniMaxClient;
 use crate::modules::{audio, image, music, video};
+use crate::palette;
 
 #[derive(Debug, Clone)]
 pub struct SmokeMediaOptions {
@@ -41,6 +42,11 @@ pub async fn run_smoke_media(
     config: &crate::config::Config,
     options: SmokeMediaOptions,
 ) -> Result<()> {
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+    let (muted_r, muted_g, muted_b) = palette::MINIMAX_SILVER_RGB;
+
     fs::create_dir_all(&options.output_dir).with_context(|| {
         format!(
             "Failed to create output_dir: {}",
@@ -170,14 +176,26 @@ pub async fn run_smoke_media(
     }
 
     println!();
-    println!("{}", "Smoke test results".bold().cyan());
-    println!("{}", "==================".cyan());
+    println!(
+        "{}",
+        "Smoke test results"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
+    );
+    println!("{}", "==================".truecolor(blue_r, blue_g, blue_b));
     if !options.skip_image {
         if image_paths.is_empty() {
-            println!("  {} image: (none)", "!".yellow());
+            println!(
+                "  {} image: (none)",
+                "!".truecolor(orange_r, orange_g, orange_b)
+            );
         } else {
             for path in &image_paths {
-                println!("  {} image: {}", "✓".green(), path.display());
+                println!(
+                    "  {} image: {}",
+                    "✓".truecolor(green_r, green_g, green_b),
+                    path.display()
+                );
             }
         }
     }
@@ -186,7 +204,9 @@ pub async fn run_smoke_media(
             "  {} music: {}",
             music_path
                 .as_ref()
-                .map_or_else(|| "!".yellow(), |_| "✓".green()),
+                .map_or_else(|| "!".truecolor(orange_r, orange_g, orange_b), |_| {
+                    "✓".truecolor(green_r, green_g, green_b)
+                }),
             music_path
                 .as_ref()
                 .map_or_else(|| "(none)".to_string(), |p| p.display().to_string())
@@ -197,7 +217,9 @@ pub async fn run_smoke_media(
             "  {} tts: {}",
             tts_path
                 .as_ref()
-                .map_or_else(|| "!".yellow(), |_| "✓".green()),
+                .map_or_else(|| "!".truecolor(orange_r, orange_g, orange_b), |_| {
+                    "✓".truecolor(green_r, green_g, green_b)
+                }),
             tts_path
                 .as_ref()
                 .map_or_else(|| "(none)".to_string(), |p| p.display().to_string())
@@ -205,14 +227,21 @@ pub async fn run_smoke_media(
     }
     if !options.skip_video {
         if let Some(path) = &video_path {
-            println!("  {} video: {}", "✓".green(), path.display());
+            println!(
+                "  {} video: {}",
+                "✓".truecolor(green_r, green_g, green_b),
+                path.display()
+            );
         } else if let Some(task_id) = &video_task_id {
             println!(
                 "  {} video: submitted task_id={task_id} (async)",
-                "·".dimmed()
+                "·".truecolor(muted_r, muted_g, muted_b)
             );
         } else {
-            println!("  {} video: (none)", "!".yellow());
+            println!(
+                "  {} video: (none)",
+                "!".truecolor(orange_r, orange_g, orange_b)
+            );
         }
     }
 
@@ -224,6 +253,7 @@ fn validate_generated_file(path: &Path, expected: ValidationKind) -> Result<()> 
 }
 
 fn validate_file(path: &Path, expected: ValidationKind) -> Result<()> {
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
     let data =
         fs::read(path).with_context(|| format!("Failed to read output file {}", path.display()))?;
     if data.is_empty() {
@@ -244,7 +274,7 @@ fn validate_file(path: &Path, expected: ValidationKind) -> Result<()> {
             if !looks_like_json(&data) {
                 println!(
                     "{} {} (expected JSON, detected {:?})",
-                    "!".yellow(),
+                    "!".truecolor(orange_r, orange_g, orange_b),
                     path.display(),
                     detected
                 );
@@ -256,7 +286,7 @@ fn validate_file(path: &Path, expected: ValidationKind) -> Result<()> {
             } else {
                 println!(
                     "{} {} (expected image, detected {:?})",
-                    "!".yellow(),
+                    "!".truecolor(orange_r, orange_g, orange_b),
                     path.display(),
                     detected
                 );
@@ -268,7 +298,7 @@ fn validate_file(path: &Path, expected: ValidationKind) -> Result<()> {
             } else {
                 println!(
                     "{} {} (expected audio, detected {:?})",
-                    "!".yellow(),
+                    "!".truecolor(orange_r, orange_g, orange_b),
                     path.display(),
                     detected
                 );
@@ -280,7 +310,7 @@ fn validate_file(path: &Path, expected: ValidationKind) -> Result<()> {
             } else {
                 println!(
                     "{} {} (expected video, detected {:?})",
-                    "!".yellow(),
+                    "!".truecolor(orange_r, orange_g, orange_b),
                     path.display(),
                     detected
                 );

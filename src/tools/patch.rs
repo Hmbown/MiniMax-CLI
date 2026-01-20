@@ -16,7 +16,7 @@ use super::spec::{
 };
 
 /// Maximum lines of context for fuzzy matching
-const MAX_FUZZ: usize = 3;
+const MAX_FUZZ: usize = 50;
 
 // === Types ===
 
@@ -55,8 +55,11 @@ pub struct ApplyPatchTool;
 
 #[derive(Debug, Error)]
 enum ApplyHunkError {
-    #[error("Failed to find matching location for hunk (expected at line {expected_line})")]
-    NoMatch { expected_line: usize },
+    #[error("Failed to find matching location for hunk (expected at line {expected_line}, adjusted to {adjusted_line})")]
+    NoMatch {
+        expected_line: usize,
+        adjusted_line: usize,
+    },
 }
 
 #[async_trait]
@@ -150,9 +153,10 @@ impl ToolSpec for ApplyPatchTool {
         let mut lines: Vec<String> = original_content.lines().map(String::from).collect();
         let mut total_fuzz = 0;
         let mut hunks_applied = 0;
+        let mut cumulative_offset: isize = 0; // Track line drift across hunks
 
         for hunk in &hunks {
-            match apply_hunk(&mut lines, hunk, fuzz) {
+            match apply_hunk(&mut lines, hunk, fuzz, &mut cumulative_offset) {
                 Ok(fuzz_used) => {
                     total_fuzz += fuzz_used;
                     hunks_applied += 1;
@@ -344,6 +348,7 @@ fn apply_hunk(
     lines: &mut Vec<String>,
     hunk: &Hunk,
     max_fuzz: usize,
+    cumulative_offset: &mut isize,
 ) -> Result<usize, ApplyHunkError> {
     // Build expected old lines from hunk
     let old_lines: Vec<&str> = hunk
@@ -365,12 +370,13 @@ fn apply_hunk(
         })
         .collect();
 
-    // Try to find the location with fuzzy matching
-    let start_idx = if hunk.old_start > 0 {
+    // Calculate adjusted start position with cumulative offset
+    let base_idx = if hunk.old_start > 0 {
         hunk.old_start - 1
     } else {
         0
     };
+    let start_idx = ((base_idx as isize) + *cumulative_offset).max(0) as usize;
 
     for fuzz in 0..=max_fuzz {
         // Try at exact position first, then nearby
@@ -387,6 +393,11 @@ fn apply_hunk(
                 // Apply the hunk
                 let end_pos = pos + old_lines.len();
                 lines.splice(pos..end_pos, new_lines.clone());
+
+                // Update cumulative offset: new lines minus old lines
+                let delta = new_lines.len() as isize - old_lines.len() as isize;
+                *cumulative_offset += delta;
+
                 return Ok(fuzz);
             }
         }
@@ -394,12 +405,15 @@ fn apply_hunk(
 
     // Special case: adding to empty file or new hunk at end
     if old_lines.is_empty() && (lines.is_empty() || start_idx >= lines.len()) {
+        let delta = new_lines.len() as isize;
         lines.extend(new_lines);
+        *cumulative_offset += delta;
         return Ok(0);
     }
 
     Err(ApplyHunkError::NoMatch {
         expected_line: hunk.old_start,
+        adjusted_line: start_idx + 1,
     })
 }
 
@@ -475,7 +489,8 @@ mod tests {
             ],
         };
 
-        let fuzz = apply_hunk(&mut lines, &hunk, 0).unwrap();
+        let mut offset: isize = 0;
+        let fuzz = apply_hunk(&mut lines, &hunk, 0, &mut offset).unwrap();
         assert_eq!(fuzz, 0);
         assert_eq!(lines, vec!["line1", "modified", "line3"]);
     }
@@ -502,7 +517,8 @@ mod tests {
             ],
         };
 
-        let fuzz = apply_hunk(&mut lines, &hunk, 3).unwrap();
+        let mut offset: isize = 0;
+        let fuzz = apply_hunk(&mut lines, &hunk, 3, &mut offset).unwrap();
         assert!(fuzz > 0);
         assert_eq!(lines, vec!["line0", "modified", "line2", "line3"]);
     }
@@ -521,8 +537,63 @@ mod tests {
             ],
         };
 
-        let err = apply_hunk(&mut lines, &hunk, 0).unwrap_err();
-        assert!(matches!(err, ApplyHunkError::NoMatch { expected_line: 5 }));
+        let mut offset: isize = 0;
+        let err = apply_hunk(&mut lines, &hunk, 0, &mut offset).unwrap_err();
+        assert!(matches!(
+            err,
+            ApplyHunkError::NoMatch {
+                expected_line: 5,
+                adjusted_line: 5
+            }
+        ));
+    }
+
+    #[test]
+    fn test_multi_hunk_offset_tracking() {
+        // File with 6 lines
+        let mut lines: Vec<String> = vec![
+            "line1".to_string(),
+            "line2".to_string(),
+            "line3".to_string(),
+            "line4".to_string(),
+            "line5".to_string(),
+            "line6".to_string(),
+        ];
+
+        // Hunk 1: Add 2 lines at the beginning (offset becomes +2)
+        let hunk1 = Hunk {
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 3,
+            lines: vec![
+                HunkLine::Remove("line1".to_string()),
+                HunkLine::Add("new1".to_string()),
+                HunkLine::Add("new2".to_string()),
+                HunkLine::Add("line1".to_string()),
+            ],
+        };
+
+        // Hunk 2: Modify line 5 (which is now at line 7 due to +2 offset)
+        let hunk2 = Hunk {
+            old_start: 5, // Original position
+            old_count: 1,
+            new_start: 7,
+            new_count: 1,
+            lines: vec![
+                HunkLine::Remove("line5".to_string()),
+                HunkLine::Add("modified5".to_string()),
+            ],
+        };
+
+        let mut offset: isize = 0;
+
+        // Both hunks should succeed with offset tracking
+        apply_hunk(&mut lines, &hunk1, 3, &mut offset).unwrap();
+        assert_eq!(offset, 2); // Added 2 net lines
+
+        apply_hunk(&mut lines, &hunk2, 3, &mut offset).unwrap();
+        assert!(lines.contains(&"modified5".to_string()));
     }
 
     #[tokio::test]

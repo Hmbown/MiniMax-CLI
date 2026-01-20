@@ -2,6 +2,7 @@
 
 use super::CommandResult;
 use crate::config::clear_api_key;
+use crate::palette;
 use crate::settings::Settings;
 use crate::tui::app::{App, AppMode, OnboardingState};
 use crate::tui::approval::ApprovalMode;
@@ -117,10 +118,36 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
         "auto_compact" | "compact" => {
             app.auto_compact = settings.auto_compact;
         }
+        "show_thinking" | "thinking" => {
+            app.show_thinking = settings.show_thinking;
+            app.mark_history_updated();
+        }
+        "show_tool_details" | "tool_details" => {
+            app.show_tool_details = settings.show_tool_details;
+            app.mark_history_updated();
+        }
+        "default_mode" | "mode" => {
+            let mode = match settings.default_mode.as_str() {
+                "agent" => AppMode::Agent,
+                "plan" => AppMode::Plan,
+                "yolo" => AppMode::Yolo,
+                "rlm" => AppMode::Rlm,
+                "duo" => AppMode::Duo,
+                _ => AppMode::Normal,
+            };
+            app.set_mode(mode);
+        }
+        "max_history" | "history" => {
+            app.max_input_history = settings.max_input_history;
+        }
         "default_model" => {
             if let Some(ref model) = settings.default_model {
                 app.model.clone_from(model);
             }
+        }
+        "theme" => {
+            app.ui_theme = palette::ui_theme(&settings.theme);
+            app.mark_history_updated();
         }
         _ => {}
     }

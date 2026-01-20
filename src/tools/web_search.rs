@@ -13,7 +13,7 @@ use std::time::Duration;
 const DEFAULT_MAX_RESULTS: usize = 5;
 const MAX_RESULTS: usize = 10;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 
 #[derive(Debug, Clone, Serialize)]
 struct WebSearchEntry {
@@ -95,10 +95,11 @@ impl ToolSpec for WebSearchTool {
             })?;
 
         let encoded = url_encode(&query);
-        let url = format!("https://duckduckgo.com/html/?q={encoded}");
+        let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
         let resp = client
             .get(&url)
-            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.5")
             .send()
             .await
             .map_err(|e| ToolError::execution_failed(format!("Web search request failed: {e}")))?;
@@ -137,9 +138,9 @@ impl ToolSpec for WebSearchTool {
 
 fn parse_duckduckgo_results(html: &str, max_results: usize) -> Vec<WebSearchEntry> {
     let title_re =
-        Regex::new(r#"<a[^>]*class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"#).unwrap();
+        Regex::new(r#"<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#).unwrap();
     let snippet_re = Regex::new(
-        r#"<a[^>]*class=\"result__snippet\"[^>]*>(.*?)</a>|<div[^>]*class=\"result__snippet\"[^>]*>(.*?)</div>"#,
+        r#"<a[^>]*class="result__snippet"[^>]*>(.*?)</a>|<div[^>]*class="result__snippet"[^>]*>(.*?)</div>"#,
     )
     .unwrap();
     let snippets: Vec<String> = snippet_re

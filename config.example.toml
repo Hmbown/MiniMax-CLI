@@ -15,8 +15,8 @@ api_key = "YOUR_MINIMAX_API_KEY" # must be non-empty
 # ─────────────────────────────────────────────────────────────────────────────────
 # Base URLs
 # ─────────────────────────────────────────────────────────────────────────────────
-base_url = "https://api.minimax.io"
-# base_url = "https://api.minimaxi.com"         # China users
+base_url = "https://api.minimax.io" # US/global endpoint (default)
+# base_url = "https://api.minimaxi.com"         # China endpoint
 # anthropic_base_url = "https://api.minimax.io/anthropic"  # Computed from base_url
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -46,6 +46,19 @@ notes_path = "~/.minimax/notes.txt"
 # Security
 # ─────────────────────────────────────────────────────────────────────────────────
 allow_shell = false
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Feature Flags
+# ─────────────────────────────────────────────────────────────────────────────────
+[features]
+shell_tool = true
+subagents = true
+web_search = true
+apply_patch = true
+mcp = true
+rlm = true
+duo = true
+exec_policy = true
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Retry Configuration
