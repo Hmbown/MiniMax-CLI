@@ -2,8 +2,8 @@ use crossterm::event::KeyEvent;
 use ratatui::{buffer::Buffer, layout::Rect};
 use std::fmt;
 
-use crate::tui::approval::ReviewDecision;
 use crate::palette;
+use crate::tui::approval::ReviewDecision;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
@@ -229,10 +229,7 @@ impl ModalView for HelpView {
                         Style::default().fg(palette::MINIMAX_BLUE).bold(),
                     )]))
                     .title_bottom(Line::from(vec![
-                        Span::styled(
-                            " Esc to close ",
-                            Style::default().fg(palette::TEXT_MUTED),
-                        ),
+                        Span::styled(" Esc to close ", Style::default().fg(palette::TEXT_MUTED)),
                         Span::styled(
                             scroll_indicator,
                             Style::default().fg(palette::MINIMAX_ORANGE),

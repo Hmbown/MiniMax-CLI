@@ -1482,9 +1482,9 @@ fn render(f: &mut Frame, app: &mut App) {
     let status_height =
         u16::try_from(status_lines + queued_lines + editing_lines).unwrap_or(u16::MAX);
     let prompt = prompt_for_mode(app.mode, app.rlm_repl_active);
-    let available_height =
-        size.height
-            .saturating_sub(header_height + footer_height + status_height);
+    let available_height = size
+        .height
+        .saturating_sub(header_height + footer_height + status_height);
     let composer_height = {
         let composer_widget = ComposerWidget::new(app, prompt, available_height);
         composer_widget.desired_height(size.width)
@@ -1604,15 +1604,9 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
         let spinner = minimax_squiggle(app.turn_started_at);
         let label = minimax_thinking_label(app.turn_started_at);
         let mut spans = vec![
-            Span::styled(
-                spinner,
-                Style::default().fg(palette::MINIMAX_ORANGE).bold(),
-            ),
+            Span::styled(spinner, Style::default().fg(palette::MINIMAX_ORANGE).bold()),
             Span::raw(" "),
-            Span::styled(
-                label,
-                Style::default().fg(palette::STATUS_WARNING).bold(),
-            ),
+            Span::styled(label, Style::default().fg(palette::STATUS_WARNING).bold()),
         ];
         if let Some(header) = header {
             spans.push(Span::raw(": "));
@@ -2224,10 +2218,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             ]));
             lines.push(Line::from(vec![
                 Span::styled("Press ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled(
-                    "Ctrl+C",
-                    Style::default().fg(palette::TEXT_PRIMARY).bold(),
-                ),
+                Span::styled("Ctrl+C", Style::default().fg(palette::TEXT_PRIMARY).bold()),
                 Span::styled(" to exit", Style::default().fg(palette::TEXT_MUTED)),
             ]));
 

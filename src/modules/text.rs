@@ -227,9 +227,7 @@ async fn process_anthropic_turn(
                         tool_blocks.insert(index, (id, name.clone(), String::new()));
                         println!(
                             "{} {}",
-                            "Tool Call:"
-                                .truecolor(blue_r, blue_g, blue_b)
-                                .bold(),
+                            "Tool Call:".truecolor(blue_r, blue_g, blue_b).bold(),
                             name.truecolor(blue_r, blue_g, blue_b).bold()
                         );
                     }
@@ -238,9 +236,7 @@ async fn process_anthropic_turn(
                     Delta::ThinkingDelta { thinking } => {
                         print!(
                             "{}",
-                            thinking
-                                .truecolor(orange_r, orange_g, orange_b)
-                                .dimmed()
+                            thinking.truecolor(orange_r, orange_g, orange_b).dimmed()
                         );
                         io::stdout().flush()?;
                         current_thinking.push_str(&thinking);
@@ -330,9 +326,7 @@ async fn process_anthropic_turn(
                     );
                     println!(
                         "{}",
-                        thinking
-                            .truecolor(orange_r, orange_g, orange_b)
-                            .dimmed()
+                        thinking.truecolor(orange_r, orange_g, orange_b).dimmed()
                     );
                 }
                 ContentBlock::Text { text, .. } => {
@@ -341,9 +335,7 @@ async fn process_anthropic_turn(
                 ContentBlock::ToolUse { name, input, .. } => {
                     println!(
                         "{} {}",
-                        "Tool Call:"
-                            .truecolor(blue_r, blue_g, blue_b)
-                            .bold(),
+                        "Tool Call:".truecolor(blue_r, blue_g, blue_b).bold(),
                         name.truecolor(blue_r, blue_g, blue_b).bold()
                     );
                     println!("{}", pretty_json(input));

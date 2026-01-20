@@ -55,7 +55,9 @@ pub struct ApplyPatchTool;
 
 #[derive(Debug, Error)]
 enum ApplyHunkError {
-    #[error("Failed to find matching location for hunk (expected at line {expected_line}, adjusted to {adjusted_line})")]
+    #[error(
+        "Failed to find matching location for hunk (expected at line {expected_line}, adjusted to {adjusted_line})"
+    )]
     NoMatch {
         expected_line: usize,
         adjusted_line: usize,

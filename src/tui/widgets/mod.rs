@@ -182,7 +182,10 @@ impl Renderable for ComposerWidget<'_> {
                 "Type a message or /help for commands..."
             };
             lines.push(Line::from(vec![
-                Span::styled(self.prompt, Style::default().fg(palette::MINIMAX_BLUE).bold()),
+                Span::styled(
+                    self.prompt,
+                    Style::default().fg(palette::MINIMAX_BLUE).bold(),
+                ),
                 Span::styled(
                     placeholder,
                     Style::default().fg(palette::TEXT_MUTED).italic(),

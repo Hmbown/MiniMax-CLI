@@ -171,7 +171,10 @@ impl Renderable for HeaderWidget<'_> {
 
         if available >= total_content {
             spans.append(&mut left_spans);
-            spans.push(Span::styled(" | ", Style::default().fg(palette::TEXT_MUTED)));
+            spans.push(Span::styled(
+                " | ",
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
             spans.push(context_span);
 
             if let Some(streaming) = streaming_span {
@@ -184,7 +187,10 @@ impl Renderable for HeaderWidget<'_> {
             }
         } else if available >= left_width + context_width + 3 {
             spans.append(&mut left_spans);
-            spans.push(Span::styled(" | ", Style::default().fg(palette::TEXT_MUTED)));
+            spans.push(Span::styled(
+                " | ",
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
             spans.push(context_span);
         } else if available >= left_width {
             spans.append(&mut left_spans);

@@ -494,8 +494,8 @@ fn run_sandbox_command(args: SandboxArgs) -> Result<()> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("Command is required"))?;
-    let spec = CommandSpec::program(program, args.to_vec(), cwd.clone(), timeout)
-        .with_policy(policy);
+    let spec =
+        CommandSpec::program(program, args.to_vec(), cwd.clone(), timeout).with_policy(policy);
     let manager = SandboxManager::new();
     let exec_env = manager.prepare(&spec);
 
@@ -603,7 +603,9 @@ async fn run_doctor() {
 
     println!(
         "{}",
-        "MiniMax CLI Doctor".truecolor(blue_r, blue_g, blue_b).bold()
+        "MiniMax CLI Doctor"
+            .truecolor(blue_r, blue_g, blue_b)
+            .bold()
     );
     println!("{}", "==================".truecolor(blue_r, blue_g, blue_b));
     println!();
@@ -696,24 +698,41 @@ async fn run_doctor() {
                     println!("    → Verify your API key is active at https://platform.minimax.io");
                     println!("    → Keys look like: sk-api-...");
                 } else if error_msg.contains("403") || error_msg.contains("Forbidden") {
-                    println!("    {}", "✗ API key lacks permissions".truecolor(red_r, red_g, red_b));
+                    println!(
+                        "    {}",
+                        "✗ API key lacks permissions".truecolor(red_r, red_g, red_b)
+                    );
                     println!("    → Verify your API key is active at https://platform.minimax.io");
                     println!("    → You may need to generate a new API key");
                 } else if error_msg.contains("timeout") || error_msg.contains("Timeout") {
-                    println!("    {}", "✗ Connection timed out".truecolor(red_r, red_g, red_b));
+                    println!(
+                        "    {}",
+                        "✗ Connection timed out".truecolor(red_r, red_g, red_b)
+                    );
                     println!("    → Check your network connection");
                     println!("    → Try again - this may be a temporary issue");
-                    println!("    → China users: try setting MINIMAX_BASE_URL=https://api.minimaxi.com");
+                    println!(
+                        "    → China users: try setting MINIMAX_BASE_URL=https://api.minimaxi.com"
+                    );
                 } else if error_msg.contains("dns") || error_msg.contains("resolve") {
-                    println!("    {}", "✗ DNS resolution failed".truecolor(red_r, red_g, red_b));
+                    println!(
+                        "    {}",
+                        "✗ DNS resolution failed".truecolor(red_r, red_g, red_b)
+                    );
                     println!("    → Check your network connection");
                     println!("    → Verify you can reach api.minimax.io");
                 } else if error_msg.contains("certificate") || error_msg.contains("SSL") {
-                    println!("    {}", "✗ SSL/certificate error".truecolor(red_r, red_g, red_b));
+                    println!(
+                        "    {}",
+                        "✗ SSL/certificate error".truecolor(red_r, red_g, red_b)
+                    );
                     println!("    → Check your system clock and date");
                     println!("    → Your SSL certificates may be outdated");
                 } else if error_msg.contains("connection refused") {
-                    println!("    {}", "✗ Connection refused".truecolor(red_r, red_g, red_b));
+                    println!(
+                        "    {}",
+                        "✗ Connection refused".truecolor(red_r, red_g, red_b)
+                    );
                     println!("    → The API server may be down");
                     println!("    → Check https://status.minimax.io for outages");
                     println!("    → Try again later");
@@ -732,7 +751,10 @@ async fn run_doctor() {
                     };
                     println!("    {}", truncated);
                     println!();
-                    println!("    {} Need more help?", "→".truecolor(blue_r, blue_g, blue_b).bold());
+                    println!(
+                        "    {} Need more help?",
+                        "→".truecolor(blue_r, blue_g, blue_b).bold()
+                    );
                     println!("    → Run with -v for verbose logging");
                     println!("    → Check https://github.com/Hmbown/MiniMax-CLI/issues");
                 }
@@ -741,7 +763,10 @@ async fn run_doctor() {
                 println!();
                 println!("    {}", "Quick fixes:".bold());
                 println!("    → export MINIMAX_API_KEY='your-key-here'");
-                println!("    → Run {} again to verify", "minimax doctor".truecolor(blue_r, blue_g, blue_b));
+                println!(
+                    "    → Run {} again to verify",
+                    "minimax doctor".truecolor(blue_r, blue_g, blue_b)
+                );
             }
         }
     } else {
@@ -756,7 +781,10 @@ async fn run_doctor() {
         println!("    2. Either:");
         println!("       → Set environment variable: export MINIMAX_API_KEY='your-key'");
         println!("       → Or create config: ~/.minimax/config.toml");
-        println!("    3. Run {} to verify", "minimax doctor".truecolor(blue_r, blue_g, blue_b));
+        println!(
+            "    3. Run {} to verify",
+            "minimax doctor".truecolor(blue_r, blue_g, blue_b)
+        );
     }
 
     // Check MCP configuration
@@ -925,9 +953,7 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
 
     println!(
         "{}",
-        "Saved Sessions"
-            .truecolor(blue_r, blue_g, blue_b)
-            .bold()
+        "Saved Sessions".truecolor(blue_r, blue_g, blue_b).bold()
     );
     println!("{}", "==============".truecolor(blue_r, blue_g, blue_b));
     println!();
@@ -935,11 +961,7 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
     for (i, session) in sessions.iter().take(limit).enumerate() {
         let line = format_session_line(session);
         if i == 0 {
-            println!(
-                "  {} {}",
-                "*".truecolor(green_r, green_g, green_b),
-                line
-            );
+            println!("  {} {}", "*".truecolor(green_r, green_g, green_b), line);
         } else {
             println!("    {line}");
         }

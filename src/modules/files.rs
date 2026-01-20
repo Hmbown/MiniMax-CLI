@@ -199,13 +199,10 @@ pub async fn retrieve_file(
         }
     }
 
-    println!(
-        "{}",
-        {
-            let (r, g, b) = palette::MINIMAX_ORANGE_RGB;
-            "Failed to retrieve file: no download URL returned.".truecolor(r, g, b)
-        }
-    );
+    println!("{}", {
+        let (r, g, b) = palette::MINIMAX_ORANGE_RGB;
+        "Failed to retrieve file: no download URL returned.".truecolor(r, g, b)
+    });
     println!("{}", pretty_json(&response));
     Ok(None)
 }

@@ -23,11 +23,7 @@ pub fn is_verbose() -> bool {
 pub fn info(message: impl AsRef<str>) {
     if is_verbose() {
         let (r, g, b) = palette::MINIMAX_BLUE_RGB;
-        eprintln!(
-            "{} {}",
-            "info".truecolor(r, g, b).bold(),
-            message.as_ref()
-        );
+        eprintln!("{} {}", "info".truecolor(r, g, b).bold(), message.as_ref());
     }
 }
 
@@ -35,10 +31,6 @@ pub fn info(message: impl AsRef<str>) {
 pub fn warn(message: impl AsRef<str>) {
     if is_verbose() {
         let (r, g, b) = palette::MINIMAX_ORANGE_RGB;
-        eprintln!(
-            "{} {}",
-            "warn".truecolor(r, g, b).bold(),
-            message.as_ref()
-        );
+        eprintln!("{} {}", "warn".truecolor(r, g, b).bold(), message.as_ref());
     }
 }

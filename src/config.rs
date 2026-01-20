@@ -162,7 +162,6 @@ impl Config {
         self.minimax_api_key()
     }
 
-
     /// Resolve enabled features from defaults and config entries.
     #[must_use]
     pub fn features(&self) -> Features {

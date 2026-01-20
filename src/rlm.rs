@@ -160,9 +160,7 @@ impl SystemResources {
         let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
         println!(
             "{}",
-            "System Resources"
-                .truecolor(blue_r, blue_g, blue_b)
-                .bold()
+            "System Resources".truecolor(blue_r, blue_g, blue_b).bold()
         );
         if let Some(mem) = self.available_memory_mb {
             let mem_f64 = f64::from(u32::try_from(mem).unwrap_or(u32::MAX));
@@ -744,18 +742,12 @@ pub fn handle_command(command: RlmCommand, _config: &Config) -> Result<()> {
                         .truecolor(green_r, green_g, green_b)
                 );
                 for result in results {
-                    println!(
-                        "{}",
-                        "─".repeat(60).truecolor(muted_r, muted_g, muted_b)
-                    );
+                    println!("{}", "─".repeat(60).truecolor(muted_r, muted_g, muted_b));
                     for line in &result.context {
                         println!("{line}");
                     }
                 }
-                println!(
-                    "{}",
-                    "─".repeat(60).truecolor(muted_r, muted_g, muted_b)
-                );
+                println!("{}", "─".repeat(60).truecolor(muted_r, muted_g, muted_b));
             }
         }
         RlmCommand::Exec(args) => {
@@ -1114,10 +1106,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
         let ctx = session
             .get_context(context_id)
             .expect("context should exist after load_context");
-        println!(
-            "{}",
-            "Context loaded!".truecolor(green_r, green_g, green_b)
-        );
+        println!("{}", "Context loaded!".truecolor(green_r, green_g, green_b));
         println!("  Lines: {} | Chars: {}\n", ctx.line_count, ctx.char_count);
     }
 
@@ -1128,10 +1117,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
     let _ = editor.load_history(&history_path);
 
     loop {
-        let prompt = format!(
-            "{}> ",
-            "rlm".truecolor(blue_r, blue_g, blue_b)
-        );
+        let prompt = format!("{}> ", "rlm".truecolor(blue_r, blue_g, blue_b));
         match editor.readline(&prompt) {
             Ok(line) => {
                 let input = line.trim();
@@ -1167,11 +1153,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
                             println!("  Lines: {} | Chars: {}", ctx.line_count, ctx.char_count);
                         }
                         Err(e) => {
-                            println!(
-                                "{}: {}",
-                                "Error".truecolor(red_r, red_g, red_b),
-                                e
-                            );
+                            println!("{}: {}", "Error".truecolor(red_r, red_g, red_b), e);
                         }
                     }
                     continue;
@@ -1189,11 +1171,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
                 if let Some(ctx) = session.get_context(context_id) {
                     match eval_expr(ctx, input) {
                         Ok(result) => println!("{result}"),
-                        Err(e) => println!(
-                            "{}: {}",
-                            "Error".truecolor(red_r, red_g, red_b),
-                            e
-                        ),
+                        Err(e) => println!("{}: {}", "Error".truecolor(red_r, red_g, red_b), e),
                     }
                 } else {
                     println!(
@@ -1205,11 +1183,7 @@ fn run_repl(context_id: &str, initial_load: Option<&std::path::Path>) -> Result<
             Err(ReadlineError::Interrupted) => {}
             Err(ReadlineError::Eof) => break,
             Err(err) => {
-                println!(
-                    "{}: {}",
-                    "Error".truecolor(red_r, red_g, red_b),
-                    err
-                );
+                println!("{}: {}", "Error".truecolor(red_r, red_g, red_b), err);
                 break;
             }
         }
@@ -1234,10 +1208,7 @@ fn print_repl_help() {
     println!("  /help          Show this help");
     println!("  /exit          Exit REPL");
     println!();
-    println!(
-        "{}",
-        "Expressions".truecolor(blue_r, blue_g, blue_b).bold()
-    );
+    println!("{}", "Expressions".truecolor(blue_r, blue_g, blue_b).bold());
     println!();
     println!("  len              Character count");
     println!("  line_count       Line count");

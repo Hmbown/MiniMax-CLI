@@ -31,7 +31,10 @@ fn audit_file(path: &Path, violations: &mut Vec<String>) {
     };
 
     for (line_num, line) in content.lines().enumerate() {
-        for pattern in DISALLOWED_COLORIZE.iter().chain(DISALLOWED_COLOR_ENUMS.iter()) {
+        for pattern in DISALLOWED_COLORIZE
+            .iter()
+            .chain(DISALLOWED_COLOR_ENUMS.iter())
+        {
             if line.contains(pattern) {
                 violations.push(format!(
                     "{}:{}: direct color usage ({pattern})",

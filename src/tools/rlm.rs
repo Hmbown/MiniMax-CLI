@@ -646,10 +646,9 @@ impl RlmQueryTool {
     ) -> Result<String, ToolError> {
         match tool_name {
             "rlm_exec" => {
-                let code = input
-                    .get("code")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ToolError::invalid_input("rlm_exec requires 'code' parameter"))?;
+                let code = input.get("code").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::invalid_input("rlm_exec requires 'code' parameter")
+                })?;
 
                 let ctx_id = input
                     .get("context_id")
@@ -685,8 +684,9 @@ impl RlmQueryTool {
                 let sub_tool = self.with_depth(self.current_depth + 1);
 
                 // Build a minimal ToolContext for the recursive call
-                let dummy_context = crate::tools::spec::ToolContext::new(std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(".")));
+                let dummy_context = crate::tools::spec::ToolContext::new(
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                );
 
                 let result = sub_tool.execute(input.clone(), &dummy_context).await?;
                 Ok(result.content)

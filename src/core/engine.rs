@@ -672,8 +672,7 @@ impl Engine {
                         builder
                             .with_subagent_tools(
                                 self.subagent_manager.clone(),
-                                runtime
-                                    .expect("sub-agent runtime should exist with active client"),
+                                runtime.expect("sub-agent runtime should exist with active client"),
                             )
                             .build(tool_context),
                     )

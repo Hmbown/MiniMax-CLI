@@ -202,11 +202,10 @@ pub async fn run_smoke_media(
     if !options.skip_music {
         println!(
             "  {} music: {}",
-            music_path
-                .as_ref()
-                .map_or_else(|| "!".truecolor(orange_r, orange_g, orange_b), |_| {
-                    "✓".truecolor(green_r, green_g, green_b)
-                }),
+            music_path.as_ref().map_or_else(
+                || "!".truecolor(orange_r, orange_g, orange_b),
+                |_| { "✓".truecolor(green_r, green_g, green_b) }
+            ),
             music_path
                 .as_ref()
                 .map_or_else(|| "(none)".to_string(), |p| p.display().to_string())
@@ -215,11 +214,10 @@ pub async fn run_smoke_media(
     if !options.skip_tts {
         println!(
             "  {} tts: {}",
-            tts_path
-                .as_ref()
-                .map_or_else(|| "!".truecolor(orange_r, orange_g, orange_b), |_| {
-                    "✓".truecolor(green_r, green_g, green_b)
-                }),
+            tts_path.as_ref().map_or_else(
+                || "!".truecolor(orange_r, orange_g, orange_b),
+                |_| { "✓".truecolor(green_r, green_g, green_b) }
+            ),
             tts_path
                 .as_ref()
                 .map_or_else(|| "(none)".to_string(), |p| p.display().to_string())
