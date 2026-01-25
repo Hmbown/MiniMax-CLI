@@ -23,6 +23,28 @@ pub struct RetryConfig {
     pub exponential_base: Option<f64>,
 }
 
+/// RLM configuration loaded from config files.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RlmConfig {
+    pub max_context_chars: Option<usize>,
+    pub max_search_results: Option<usize>,
+    pub default_chunk_size: Option<usize>,
+    pub default_overlap: Option<usize>,
+    pub session_dir: Option<String>,
+}
+
+/// Duo configuration loaded from config files.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DuoConfig {
+    pub max_turns: Option<u32>,
+    pub approval_threshold: Option<f64>,
+    pub default_max_tokens: Option<u32>,
+    pub coach_temperature: Option<f32>,
+    pub player_temperature: Option<f32>,
+}
+
 /// Resolved retry policy with defaults applied.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -54,6 +76,22 @@ pub struct Config {
     pub default_video_model: Option<String>,
     pub default_audio_model: Option<String>,
     pub default_music_model: Option<String>,
+
+    // === Coding API Configuration ===
+    /// Second API key for MiniMax Coding API (optional, falls back to primary)
+    pub api_key_2: Option<String>,
+    /// Base URL for MiniMax Coding API (optional, falls back to primary)
+    pub base_url_2: Option<String>,
+    /// Default model for coding tasks
+    pub default_coding_model: Option<String>,
+
+    // === RLM Configuration ===
+    pub rlm: Option<RlmConfig>,
+
+    // === Duo Configuration ===
+    pub duo: Option<DuoConfig>,
+
+    // === Standard Configuration ===
     pub output_dir: Option<String>,
     pub tools_file: Option<String>,
     pub skills_dir: Option<String>,
@@ -149,6 +187,69 @@ impl Config {
         format!("{}/anthropic", root.trim_end_matches('/'))
     }
 
+    // === Coding API Methods ===
+
+    /// Return the MiniMax Coding API base URL (normalized).
+    #[must_use]
+    pub fn coding_base_url(&self) -> String {
+        let base = self
+            .base_url_2
+            .clone()
+            .unwrap_or_else(|| "https://api.minimax.io".to_string());
+        normalize_base_url(&base)
+    }
+
+    /// Read the MiniMax Coding API key from config/environment.
+    pub fn coding_api_key(&self) -> Result<String> {
+        // Try api_key_2 first, fall back to primary api_key
+        if let Some(ref key) = self.api_key_2 {
+            if !key.trim().is_empty() {
+                return Ok(key.clone());
+            }
+        }
+        // Fall back to primary API key
+        self.api_key
+            .clone()
+            .context("Failed to load MiniMax API key: MINIMAX_API_KEY or MINIMAX_API_KEY_2 missing. Set it in config.toml or environment.")
+    }
+
+    /// Return the default coding model, or fall back to text model if not set.
+    #[must_use]
+    pub fn coding_model(&self) -> String {
+        self.default_coding_model
+            .clone()
+            .or_else(|| self.default_text_model.clone())
+            .unwrap_or_else(|| "MiniMax-M2.1-Coding".to_string())
+    }
+
+    /// Check if coding API is configured with a separate key.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn has_separate_coding_api_key(&self) -> bool {
+        self.api_key_2.is_some()
+            && self
+                .api_key_2
+                .as_ref()
+                .is_some_and(|k| !k.trim().is_empty())
+    }
+
+    /// Get the appropriate API key and base URL for a given mode (text or coding).
+    #[allow(dead_code)]
+    pub fn api_for_mode(&self, is_coding: bool) -> (String, String) {
+        if is_coding {
+            (
+                self.coding_api_key()
+                    .unwrap_or_else(|_| self.api_key.clone().unwrap_or_default()),
+                self.coding_base_url(),
+            )
+        } else {
+            (
+                self.minimax_api_key().unwrap_or_default(),
+                self.minimax_base_url(),
+            )
+        }
+    }
+
     /// Read the `MiniMax` API key from config/environment.
     pub fn minimax_api_key(&self) -> Result<String> {
         self.api_key
@@ -241,6 +342,124 @@ impl Config {
         self.max_subagents.unwrap_or(5).clamp(1, 5)
     }
 
+    // === RLM Configuration Methods ===
+
+    /// Resolve the effective RLM configuration with defaults applied.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn rlm_config(&self) -> RlmConfig {
+        let defaults = RlmConfig {
+            max_context_chars: Some(10_000_000),
+            max_search_results: Some(100),
+            default_chunk_size: Some(2_000),
+            default_overlap: Some(200),
+            session_dir: Some("~/.minimax/rlm".to_string()),
+        };
+
+        let Some(cfg) = &self.rlm else {
+            return defaults;
+        };
+
+        RlmConfig {
+            max_context_chars: cfg.max_context_chars.or(defaults.max_context_chars),
+            max_search_results: cfg.max_search_results.or(defaults.max_search_results),
+            default_chunk_size: cfg.default_chunk_size.or(defaults.default_chunk_size),
+            default_overlap: cfg.default_overlap.or(defaults.default_overlap),
+            session_dir: cfg.session_dir.clone().or(defaults.session_dir),
+        }
+    }
+
+    /// Get the RLM session directory path.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn rlm_session_dir(&self) -> PathBuf {
+        self.rlm_config()
+            .session_dir
+            .as_deref()
+            .map(expand_path)
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .map(|home| home.join(".minimax").join("rlm"))
+                    .unwrap_or_else(|| PathBuf::from(".minimax/rlm"))
+            })
+    }
+
+    /// Get the maximum context characters for RLM.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn rlm_max_context_chars(&self) -> usize {
+        self.rlm_config().max_context_chars.unwrap_or(10_000_000)
+    }
+
+    /// Get the maximum search results for RLM.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn rlm_max_search_results(&self) -> usize {
+        self.rlm_config().max_search_results.unwrap_or(100)
+    }
+
+    // === Duo Configuration Methods ===
+
+    /// Resolve the effective Duo configuration with defaults applied.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_config(&self) -> DuoConfig {
+        let defaults = DuoConfig {
+            max_turns: Some(10),
+            approval_threshold: Some(0.9),
+            default_max_tokens: Some(8192),
+            coach_temperature: Some(0.3),
+            player_temperature: Some(0.7),
+        };
+
+        let Some(cfg) = &self.duo else {
+            return defaults;
+        };
+
+        DuoConfig {
+            max_turns: cfg.max_turns.or(defaults.max_turns),
+            approval_threshold: cfg.approval_threshold.or(defaults.approval_threshold),
+            default_max_tokens: cfg.default_max_tokens.or(defaults.default_max_tokens),
+            coach_temperature: cfg.coach_temperature.or(defaults.coach_temperature),
+            player_temperature: cfg.player_temperature.or(defaults.player_temperature),
+        }
+    }
+
+    /// Get the maximum turns for Duo mode.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_max_turns(&self) -> u32 {
+        self.duo_config().max_turns.unwrap_or(10)
+    }
+
+    /// Get the approval threshold for Duo mode.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_approval_threshold(&self) -> f64 {
+        self.duo_config().approval_threshold.unwrap_or(0.9)
+    }
+
+    /// Get the default max tokens for Duo requests.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_default_max_tokens(&self) -> u32 {
+        self.duo_config().default_max_tokens.unwrap_or(8192)
+    }
+
+    /// Get the coach temperature for Duo validation.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_coach_temperature(&self) -> f32 {
+        self.duo_config().coach_temperature.unwrap_or(0.3)
+    }
+
+    /// Get the player temperature for Duo implementation.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn duo_player_temperature(&self) -> f32 {
+        self.duo_config().player_temperature.unwrap_or(0.7)
+    }
+
     /// Get hooks configuration, returning default if not configured.
     pub fn hooks_config(&self) -> HooksConfig {
         self.hooks.clone().unwrap_or_default()
@@ -309,8 +528,17 @@ fn apply_env_overrides(config: &mut Config) {
     if let Ok(value) = std::env::var("MINIMAX_API_KEY") {
         config.api_key = Some(value);
     }
+    if let Ok(value) = std::env::var("MINIMAX_API_KEY_2") {
+        config.api_key_2 = Some(value);
+    }
     if let Ok(value) = std::env::var("MINIMAX_BASE_URL") {
         config.base_url = Some(value);
+    }
+    if let Ok(value) = std::env::var("MINIMAX_BASE_URL_2") {
+        config.base_url_2 = Some(value);
+    }
+    if let Ok(value) = std::env::var("MINIMAX_DEFAULT_CODING_MODEL") {
+        config.default_coding_model = Some(value);
     }
     if let Ok(value) = std::env::var("MINIMAX_OUTPUT_DIR") {
         config.output_dir = Some(value);
@@ -398,6 +626,21 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         default_music_model: override_cfg
             .default_music_model
             .or(base.default_music_model),
+
+        // Coding API configuration
+        api_key_2: override_cfg.api_key_2.or(base.api_key_2),
+        base_url_2: override_cfg.base_url_2.or(base.base_url_2),
+        default_coding_model: override_cfg
+            .default_coding_model
+            .or(base.default_coding_model),
+
+        // RLM configuration
+        rlm: override_cfg.rlm.or(base.rlm),
+
+        // Duo configuration
+        duo: override_cfg.duo.or(base.duo),
+
+        // Standard configuration
         output_dir: override_cfg.output_dir.or(base.output_dir),
         tools_file: override_cfg.tools_file.or(base.tools_file),
         skills_dir: override_cfg.skills_dir.or(base.skills_dir),

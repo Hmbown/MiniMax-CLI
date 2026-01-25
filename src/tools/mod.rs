@@ -4,6 +4,7 @@
 
 // === Modules ===
 
+pub mod coding;
 pub mod duo;
 pub mod file;
 pub mod minimax;
@@ -22,6 +23,9 @@ pub mod web_search;
 
 // Re-export commonly used types from spec
 pub use spec::ToolContext;
+
+// Re-export coding tools
+pub use coding::{CodingCompleteTool, CodingReviewTool};
 
 // Re-export minimax tools
 pub use minimax::{

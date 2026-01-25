@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-25
+
+### Added
+- Auto-compaction enabled by default with token estimation and code detection
+- Engine caching for system prompts and tool schemas
+- Status footer with process, todo, and recent file indicators
+
+### Changed
+- CLI mode/branding descriptions for MiniMax + Coding API modes
+- Footer density improvements: context-aware scroll hints, brief token usage, and condensed recent files
+
 ## [0.2.2] - 2026-01-20
 
 ### Added
@@ -106,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.1.9...v0.2.0

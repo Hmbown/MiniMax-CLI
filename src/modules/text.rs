@@ -429,8 +429,9 @@ fn cache_tools(tools: Option<Vec<Tool>>, cache_tools: bool) -> Option<Vec<Tool>>
         return tools;
     }
     let mut tools = tools?;
-    if let Some(last) = tools.last_mut() {
-        last.cache_control = Some(CacheControl {
+    // Mark all tools with cache control since they're all reused
+    for tool in &mut tools {
+        tool.cache_control = Some(CacheControl {
             cache_type: "ephemeral".to_string(),
         });
     }

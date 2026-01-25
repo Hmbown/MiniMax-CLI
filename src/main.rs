@@ -48,8 +48,21 @@ use crate::llm_client::LlmClient;
     name = "minimax",
     author,
     version,
-    about = "MiniMax CLI - Chat with MiniMax M2.1",
-    long_about = "Unofficial CLI for MiniMax M2.1 API.\n\nJust run 'minimax' to start chatting.\n\nNot affiliated with MiniMax Inc."
+    about = "MiniMax CLI - AI Coding Assistant",
+    long_about = "MiniMax CLI - Professional AI Coding Assistant\n\n\
+    ✨ MiniMax M2.1: General-purpose AI chat\n\
+    🔷 MiniMax Coding API: Specialized code generation and review\n\
+    📚 RLM Mode: Recursive Language Model with context management\n\
+    🎯 Duo Mode: Player-Coach adversarial cooperation for autocoding\n\n\
+    🚀 Get started: Just run 'minimax' to start chatting!\n\
+    📖 Learn more: Run 'minimax modes' to see all available modes\n\n\
+    Not affiliated with MiniMax Inc.",
+    after_help = "Examples:\
+    \\n   minimax                    # Start interactive chat\
+    \\n   minimax modes              # Show all available modes\
+    \\n   minimax rlm                # Enter RLM mode\
+    \\n   minimax duo                # Enter Duo autocoding mode\
+    \\n   minimax coding --help      # Show coding mode options"
 )]
 struct Cli {
     /// Subcommand to run
@@ -99,6 +112,8 @@ struct Cli {
 #[derive(Subcommand, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
+    /// Show all available modes and their descriptions
+    Modes,
     /// Run system diagnostics and check configuration
     Doctor,
     /// Generate shell completions
@@ -187,6 +202,12 @@ enum Commands {
     Features(FeaturesCli),
     /// Run a command inside the sandbox
     Sandbox(SandboxArgs),
+    /// Recursive Language Model mode - context loading, searching, and chunking
+    Rlm(RlmCommand),
+    /// Duo autocoding mode - Player-Coach adversarial cooperation
+    Duo(DuoCommand),
+    /// MiniMax Coding API - specialized code generation and review
+    Coding(CodingCommand),
     /// Internal: run the responses API proxy.
     #[command(hide = true)]
     ResponsesApiProxy(responses_api_proxy::Args),
@@ -276,6 +297,147 @@ enum SandboxCommand {
     },
 }
 
+#[derive(Args, Debug, Clone)]
+struct RlmCommand {
+    #[command(subcommand)]
+    command: RlmSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum RlmSubcommand {
+    /// Enter interactive RLM REPL
+    Repl {
+        /// Context ID (default: "default")
+        #[arg(short, long)]
+        context: Option<String>,
+        /// Load file into context on start
+        #[arg(short, long)]
+        load: Option<PathBuf>,
+    },
+    /// Load a file into context
+    Load {
+        /// File path to load
+        #[arg(required = true)]
+        path: PathBuf,
+        /// Context ID (default: filename)
+        #[arg(short, long)]
+        context: Option<String>,
+    },
+    /// Search within loaded context
+    Search {
+        /// Context ID (default: active context)
+        #[arg(short, long)]
+        context: Option<String>,
+        /// Regex pattern to search
+        #[arg(required = true)]
+        pattern: String,
+        /// Context lines around matches (default: 2)
+        #[arg(short, long)]
+        lines: Option<usize>,
+        /// Maximum results (default: 20)
+        #[arg(short, long)]
+        max_results: Option<usize>,
+    },
+    /// Show RLM status and loaded contexts
+    Status {
+        /// Context ID (optional)
+        #[arg(short, long)]
+        context: Option<String>,
+    },
+    /// Save RLM session to file
+    Save {
+        /// Output file path
+        #[arg(required = true)]
+        path: PathBuf,
+        /// Context ID (default: active context)
+        #[arg(short, long)]
+        context: Option<String>,
+    },
+    /// Load RLM session from file
+    LoadSession {
+        /// Input file path
+        #[arg(required = true)]
+        path: PathBuf,
+    },
+    /// Show RLM mode help
+    Info,
+}
+
+#[derive(Args, Debug, Clone)]
+struct DuoCommand {
+    #[command(subcommand)]
+    command: DuoSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum DuoSubcommand {
+    /// Start a new Duo autocoding session
+    Start {
+        /// Path to requirements file (optional)
+        #[arg(short, long)]
+        requirements: Option<PathBuf>,
+        /// Maximum turns before timeout (default: 10)
+        #[arg(short, long)]
+        max_turns: Option<u32>,
+        /// Approval threshold 0.0-1.0 (default: 0.9)
+        #[arg(short, long)]
+        threshold: Option<f64>,
+    },
+    /// Continue an existing session
+    Continue {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+    },
+    /// List all Duo sessions
+    Sessions {
+        /// Maximum sessions to show (default: 20)
+        #[arg(short, long)]
+        limit: Option<usize>,
+    },
+    /// Show Duo mode help
+    Info,
+}
+
+#[derive(Args, Debug, Clone)]
+struct CodingCommand {
+    #[command(subcommand)]
+    command: CodingSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum CodingSubcommand {
+    /// Generate code using MiniMax Coding API
+    Complete {
+        /// Code prompt/description
+        #[arg(required = true, trailing_var_arg = true)]
+        prompt: Vec<String>,
+        /// Output file (optional)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Coding model (default: from config)
+        #[arg(short, long)]
+        model: Option<String>,
+        /// Max tokens (default: 4096)
+        #[arg(short, long)]
+        max_tokens: Option<u32>,
+        /// Temperature (default: 0.7)
+        #[arg(short, long)]
+        temperature: Option<f32>,
+    },
+    /// Review code using MiniMax Coding API
+    Review {
+        /// File path to review
+        #[arg(required = true)]
+        path: PathBuf,
+        /// Review focus (security, performance, style, all)
+        #[arg(short, long, default_value = "all")]
+        focus: String,
+    },
+    /// Show coding mode help
+    Info,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -358,6 +520,10 @@ async fn main() -> Result<()> {
                 run_features_command(&config, command)
             }
             Commands::Sandbox(args) => run_sandbox_command(args),
+            Commands::Modes => Ok(run_modes()),
+            Commands::Rlm(args) => run_rlm_command(args),
+            Commands::Duo(args) => run_duo_command(args),
+            Commands::Coding(args) => run_coding_command(args),
             Commands::ResponsesApiProxy(args) => responses_api_proxy::run_main(args),
         };
     }
@@ -589,6 +755,406 @@ fn parse_sandbox_policy(
         }),
         other => anyhow::bail!("Unknown sandbox policy: {other}"),
     }
+}
+
+/// Show all available modes and their descriptions
+fn run_modes() {
+    use colored::Colorize;
+
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+    let (green_r, green_g, green_b) = palette::MINIMAX_GREEN_RGB;
+    let (orange_r, orange_g, orange_b) = palette::MINIMAX_ORANGE_RGB;
+
+    println!();
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════════════════╗"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "║                     MiniMax CLI Modes                             ║"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════════╝"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+
+    // Interactive Chat (default)
+    println!(
+        "{}",
+        "✨ Interactive Chat"
+            .truecolor(green_r, green_g, green_b)
+            .bold()
+    );
+    println!("   Run: {}", "minimax".truecolor(blue_r, blue_g, blue_b));
+    println!("   General-purpose AI chat powered by MiniMax M2.1");
+    println!();
+
+    // RLM Mode
+    println!("{}  📚 RLM Mode", "🔷".truecolor(blue_r, blue_g, blue_b));
+    println!(
+        "   Run: {}",
+        "minimax rlm".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!("   Recursive Language Model - context loading, searching, chunking");
+    println!("   - Load files and search within them");
+    println!("   - Chunk large documents for context management");
+    println!("   - Interactive REPL for context exploration");
+    println!();
+
+    // Duo Mode
+    println!("{}  🎯 Duo Mode", "🔷".truecolor(blue_r, blue_g, blue_b));
+    println!(
+        "   Run: {}",
+        "minimax duo".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!("   Player-Coach adversarial cooperation for autocoding");
+    println!("   - Player: implements requirements (builder role)");
+    println!("   - Coach: validates implementation against requirements (critic role)");
+    println!("   - Iterates until coach approval or max turns reached");
+    println!();
+
+    // Coding API
+    println!(
+        "{}  🔷 MiniMax Coding API",
+        "🔷".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "   Run: {}",
+        "minimax coding".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!("   Specialized code generation and review");
+    println!("   - Generate code from prompts");
+    println!("   - Review code for security, performance, style");
+    println!();
+
+    // Other commands
+    println!(
+        "{}  Other Commands",
+        "📋".truecolor(orange_r, orange_g, orange_b).bold()
+    );
+    println!("   minimax doctor     - Run system diagnostics");
+    println!("   minimax sessions   - List saved sessions");
+    println!("   minimax init       - Create AGENTS.md template");
+    println!("   minimax sandbox    - Run commands in sandbox");
+    println!("   minimax completions - Generate shell completions");
+    println!();
+
+    println!(
+        "{}",
+        "For more info: Run any command with --help".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+}
+
+/// Run RLM commands
+fn run_rlm_command(command: RlmCommand) -> Result<()> {
+    use crate::rlm::{RlmCommand as RlmCmd, handle_command};
+
+    let config = load_config_from_cli(&Cli::parse())?;
+    match command.command {
+        RlmSubcommand::Repl { context, load } => {
+            let context_id = context.unwrap_or_else(|| "default".to_string());
+            let args = RlmCmd::Repl(crate::rlm::RlmReplArgs { context_id, load });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::Load { path, context } => {
+            let context_id = context.unwrap_or_else(|| {
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("context")
+                    .to_string()
+            });
+            let args = RlmCmd::Load(crate::rlm::RlmLoadArgs { path, context_id });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::Search {
+            context,
+            pattern,
+            lines,
+            max_results,
+        } => {
+            let context_id = context.unwrap_or_else(|| "default".to_string());
+            let args = RlmCmd::Search(crate::rlm::RlmSearchArgs {
+                context_id,
+                pattern,
+                context_lines: lines.unwrap_or(2),
+                max_results: max_results.unwrap_or(20),
+            });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::Status { context } => {
+            let args = RlmCmd::Status(crate::rlm::RlmStatusArgs {
+                context_id: context,
+            });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::Save { path, context } => {
+            let context_id = context.unwrap_or_else(|| "default".to_string());
+            let args = RlmCmd::SaveSession(crate::rlm::RlmSaveSessionArgs { path, context_id });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::LoadSession { path } => {
+            let args = RlmCmd::LoadSession(crate::rlm::RlmLoadSessionArgs { path });
+            handle_command(args, &config)?;
+        }
+        RlmSubcommand::Info => {
+            print_rlm_info();
+        }
+    }
+    Ok(())
+}
+
+fn print_rlm_info() {
+    use colored::Colorize;
+
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+
+    println!();
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════════════════╗"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "║                    RLM Mode - Help                                 ║"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════════╝"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!(
+        "{}  Recursive Language Model - context management",
+        "📚".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("Commands:");
+    println!();
+    println!(
+        "  {}  minimax rlm repl               Enter interactive REPL",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax rlm load <path>        Load file into context",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax rlm search <pattern>   Search in context",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax rlm status             Show loaded contexts",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax rlm save <path>        Save session",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax rlm load-session <path> Load session",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("REPL Expressions:");
+    println!("  len, line_count, head, tail, peek(start,end), lines(start,end)");
+    println!("  search(pattern), chunk(size,overlap), chunk_sections(max)");
+    println!("  vars, set(name,value), get(name), append(name,value)");
+    println!();
+}
+
+/// Run Duo commands
+fn run_duo_command(command: DuoCommand) -> Result<()> {
+    use colored::Colorize;
+
+    match command.command {
+        DuoSubcommand::Start {
+            requirements,
+            max_turns,
+            threshold,
+        } => {
+            println!("Starting Duo autocoding session...");
+            println!("Requirements: {:?}", requirements);
+            println!("Max turns: {:?}", max_turns);
+            println!("Threshold: {:?}", threshold);
+            println!(
+                "\n{}: Duo mode implementation in progress",
+                "Note".truecolor(
+                    palette::MINIMAX_ORANGE_RGB.0,
+                    palette::MINIMAX_ORANGE_RGB.1,
+                    palette::MINIMAX_ORANGE_RGB.2
+                )
+            );
+        }
+        DuoSubcommand::Continue { session } => {
+            println!("Continuing session: {}", session);
+        }
+        DuoSubcommand::Sessions { limit } => {
+            println!("Listing Duo sessions (limit: {:?})...", limit);
+        }
+        DuoSubcommand::Info => {
+            print_duo_info();
+        }
+    }
+    Ok(())
+}
+
+fn print_duo_info() {
+    use colored::Colorize;
+
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+
+    println!();
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════════════════╗"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "║                    Duo Mode - Help                                 ║"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════════╝"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!(
+        "{}  Player-Coach adversarial cooperation for autocoding",
+        "🎯".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("The Duo pattern (from g3 paper):");
+    println!("  - Player: implements requirements (builder role)");
+    println!("  - Coach: validates implementation against requirements (critic role)");
+    println!("  - Loop continues until coach approves or max turns reached");
+    println!();
+    println!("Commands:");
+    println!();
+    println!(
+        "  {}  minimax duo start              Start new autocoding session",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax duo continue <id>      Continue existing session",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax duo sessions           List all sessions",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("Options:");
+    println!("  --requirements <path>   Requirements file");
+    println!("  --max-turns <n>         Max turns (default: 10)");
+    println!("  --threshold <0.0-1.0>   Approval threshold (default: 0.9)");
+    println!();
+}
+
+/// Run Coding commands
+fn run_coding_command(command: CodingCommand) -> Result<()> {
+    use colored::Colorize;
+
+    match command.command {
+        CodingSubcommand::Complete {
+            prompt,
+            output,
+            model,
+            max_tokens,
+            temperature,
+        } => {
+            let prompt = prompt.join(" ");
+            println!("Generating code...");
+            println!("Prompt: {}", prompt);
+            println!("Output: {:?}", output);
+            println!("Model: {:?}", model);
+            println!("Max tokens: {:?}", max_tokens);
+            println!("Temperature: {:?}", temperature);
+            println!(
+                "\n{}: Coding API integration in progress",
+                "Note".truecolor(
+                    palette::MINIMAX_ORANGE_RGB.0,
+                    palette::MINIMAX_ORANGE_RGB.1,
+                    palette::MINIMAX_ORANGE_RGB.2
+                )
+            );
+        }
+        CodingSubcommand::Review { path, focus } => {
+            println!("Reviewing code...");
+            println!("File: {:?}", path);
+            println!("Focus: {}", focus);
+            println!(
+                "\n{}: Coding API integration in progress",
+                "Note".truecolor(
+                    palette::MINIMAX_ORANGE_RGB.0,
+                    palette::MINIMAX_ORANGE_RGB.1,
+                    palette::MINIMAX_ORANGE_RGB.2
+                )
+            );
+        }
+        CodingSubcommand::Info => {
+            print_coding_info();
+        }
+    }
+    Ok(())
+}
+
+fn print_coding_info() {
+    use colored::Colorize;
+
+    let (blue_r, blue_g, blue_b) = palette::MINIMAX_BLUE_RGB;
+
+    println!();
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════════════════╗"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "║                   Coding Mode - Help                               ║"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════════╝"
+            .truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!(
+        "{}  MiniMax Coding API - specialized code generation and review",
+        "🔷".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("Commands:");
+    println!();
+    println!(
+        "  {}  minimax coding complete <prompt>  Generate code",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!(
+        "  {}  minimax coding review <path>      Review code",
+        "→".truecolor(blue_r, blue_g, blue_b)
+    );
+    println!();
+    println!("Options for 'complete':");
+    println!("  --output <path>      Write to file");
+    println!("  --model <name>       Coding model");
+    println!("  --max-tokens <n>     Max tokens");
+    println!("  --temperature <val>  Temperature (0.0-1.0)");
+    println!();
+    println!("Options for 'review':");
+    println!("  --focus <type>       security | performance | style | all");
+    println!();
 }
 
 /// Run system diagnostics

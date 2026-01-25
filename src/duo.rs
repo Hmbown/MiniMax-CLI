@@ -575,6 +575,274 @@ pub fn session_summary(session: &DuoSession) -> String {
     lines.join("\n")
 }
 
+// === Coding API Integration ===
+
+/// Create a player request optimized for code generation using the coding API.
+///
+/// This helper creates a request configured for the Player role with appropriate
+/// settings for code implementation tasks.
+#[must_use]
+pub fn create_player_request(
+    state: &DuoState,
+    coding_model: &str,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+) -> crate::models::MessageRequest {
+    let prompt = generate_player_prompt(state);
+
+    crate::models::MessageRequest {
+        model: coding_model.to_string(),
+        messages: vec![crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: prompt,
+                cache_control: None,
+            }],
+        }],
+        max_tokens: max_tokens.unwrap_or(8192),
+        system: None,
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        stream: Some(false),
+        temperature,
+        top_p: Some(0.95),
+    }
+}
+
+/// Create a coach request optimized for validation using the coding API.
+///
+/// This helper creates a request configured for the Coach role with appropriate
+/// settings for code review and validation tasks.
+#[must_use]
+pub fn create_coach_request(
+    state: &DuoState,
+    implementation_content: String,
+    coding_model: &str,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+) -> crate::models::MessageRequest {
+    let mut prompt = generate_coach_prompt(state);
+
+    prompt.push_str("\n## Current Implementation\n\n");
+    prompt.push_str("Here is the implementation to validate:\n\n");
+    prompt.push_str(&implementation_content);
+
+    crate::models::MessageRequest {
+        model: coding_model.to_string(),
+        messages: vec![crate::models::Message {
+            role: "user".to_string(),
+            content: vec![crate::models::ContentBlock::Text {
+                text: prompt,
+                cache_control: None,
+            }],
+        }],
+        max_tokens: max_tokens.unwrap_or(4096),
+        system: None,
+        tools: None,
+        tool_choice: None,
+        metadata: None,
+        thinking: None,
+        stream: Some(false),
+        temperature,
+        top_p: Some(0.9),
+    }
+}
+
+/// Parse coach response to extract approval status and feedback.
+///
+/// Returns (approved, feedback, score)
+pub fn parse_coach_response(response: &str) -> (bool, String, Option<f64>) {
+    let trimmed = response.trim();
+
+    // Check for explicit approval
+    let approved = trimmed
+        .lines()
+        .any(|line| line.trim().to_uppercase().contains("COACH APPROVED"));
+
+    // Extract score if present (look for patterns like "Score: 0.85" or "85%" or "8.5/10")
+    let score = extract_score(trimmed);
+
+    // Clean up feedback - remove approval line and score mentions
+    let feedback = if approved {
+        // If approved, use the compliance checklist and notes
+        let lines: Vec<&str> = trimmed.lines().collect();
+        let checklist_lines: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.trim_start().starts_with('[') || l.trim_start().starts_with("- ["))
+            .copied()
+            .collect();
+
+        if !checklist_lines.is_empty() {
+            checklist_lines.join("\n")
+        } else {
+            "All requirements approved. Implementation meets criteria.".to_string()
+        }
+    } else {
+        // If not approved, use the full response
+        let lines: Vec<&str> = trimmed.lines().collect();
+        let feedback_lines: Vec<&str> = lines
+            .iter()
+            .filter(|l| !l.trim().to_uppercase().contains("COACH APPROVED"))
+            .filter(|l| !l.trim_start().starts_with("Score:"))
+            .filter(|l| !l.trim().is_empty())
+            .copied()
+            .collect();
+
+        feedback_lines.join("\n")
+    };
+
+    (approved, feedback, score)
+}
+
+/// Extract compliance score from coach response.
+fn extract_score(text: &str) -> Option<f64> {
+    // Look for patterns like "Score: 0.85", "85%", "8.5/10", "8.5 out of 10"
+    let patterns = [
+        r"(\d+\.?\d*)\s*(?:/|out of)\s*10",
+        r"(\d+\.?\d*)\s*%",
+        r"[Ss]core:\s*(\d+\.?\d*)",
+        r"([01]\.\d+)",
+    ];
+
+    for pattern in &patterns {
+        if let Some(captures) = regex::Regex::new(pattern)
+            .ok()
+            .and_then(|r| r.captures(text))
+        {
+            if let Some(m) = captures.get(1) {
+                let value: f64 = m.as_str().parse().ok()?;
+                // Normalize to 0-1 range
+                let normalized = if value <= 1.0 {
+                    value
+                } else if value <= 10.0 {
+                    value / 10.0
+                } else if value <= 100.0 {
+                    value / 100.0
+                } else {
+                    continue;
+                };
+                return Some(normalized.clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    None
+}
+
+/// Enhanced workflow runner for Duo mode with coding API.
+///
+/// This function manages the complete player-coach loop with proper phase transitions.
+#[allow(dead_code)]
+pub async fn run_duo_workflow<F1, F2, F3>(
+    session: &mut DuoSession,
+    coding_api_call: F1,
+    _file_read: F2,
+    progress_callback: F3,
+) -> Result<(), DuoError>
+where
+    F1: Fn(
+        crate::models::MessageRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+    >,
+    F2: Fn(
+        &std::path::Path,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+    >,
+    F3: Fn(String) -> (),
+{
+    let state = session
+        .get_active_mut()
+        .ok_or_else(|| DuoError::SessionNotFound {
+            session_id: "".to_string(),
+        })?;
+
+    let coding_model = "MiniMax-M2.1-Coding".to_string();
+
+    while !state.is_complete() {
+        match state.phase {
+            DuoPhase::Init | DuoPhase::Player => {
+                // Player phase
+                progress_callback(format!(
+                    "🎮 Player Phase (Turn {}/{})",
+                    state.current_turn, state.max_turns
+                ));
+
+                // Generate player prompt
+                let request = create_player_request(state, &coding_model, None, Some(0.7));
+
+                // Call coding API
+                let response = coding_api_call(request).await.map_err(|_| {
+                    DuoError::InvalidPhaseTransition {
+                        from: state.phase,
+                        to: DuoPhase::Coach,
+                    }
+                })?;
+
+                progress_callback(
+                    "✅ Implementation complete. Moving to Coach phase...".to_string(),
+                );
+
+                // Advance to coach phase
+                state.advance_to_coach(format!("Player implementation: {}", response))?;
+            }
+
+            DuoPhase::Coach => {
+                // Coach phase
+                progress_callback(format!("🏆 Coach Phase (Turn {})", state.current_turn));
+
+                // Get the latest implementation
+                let implementation = state
+                    .turn_history
+                    .iter()
+                    .rev()
+                    .find(|r| r.phase == DuoPhase::Player)
+                    .map(|r| r.summary.clone())
+                    .unwrap_or_else(|| "No implementation available".to_string());
+
+                // Generate coach prompt with implementation
+                let request =
+                    create_coach_request(state, implementation, &coding_model, None, Some(0.3));
+
+                // Call coding API for validation
+                let response = coding_api_call(request).await.map_err(|_| {
+                    DuoError::InvalidPhaseTransition {
+                        from: state.phase,
+                        to: DuoPhase::Player,
+                    }
+                })?;
+
+                // Parse coach response
+                let (approved, feedback, score) = parse_coach_response(&response);
+
+                progress_callback(format!("📋 Coach Feedback:\n{}", feedback));
+
+                // Advance turn
+                state.advance_turn(feedback, approved, score)?;
+
+                if approved {
+                    progress_callback("🎉 Implementation APPROVED by Coach!".to_string());
+                } else if state.phase == DuoPhase::Timeout {
+                    progress_callback("⏰ Timeout: Maximum turns reached".to_string());
+                } else {
+                    progress_callback(
+                        "🔄 Issues found. Moving to next Player phase...".to_string(),
+                    );
+                }
+            }
+
+            DuoPhase::Approved | DuoPhase::Timeout => {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // === Tests ===
 
 #[cfg(test)]

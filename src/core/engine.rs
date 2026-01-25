@@ -20,12 +20,15 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::client::AnthropicClient;
+use crate::compaction::{CompactionConfig, maybe_compact};
 use crate::config::Config;
 use crate::duo::{DuoSession, SharedDuoSession, session_summary as duo_session_summary};
 use crate::features::{Feature, Features};
+use crate::logging;
 use crate::mcp::McpPool;
 use crate::models::{
-    ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent, Tool, Usage,
+    CacheControl, ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent,
+    SystemBlock, SystemPrompt, Tool, Usage,
 };
 use crate::prompts;
 use crate::rlm::{RlmSession, SharedRlmSession, session_summary as rlm_session_summary};
@@ -75,6 +78,10 @@ pub struct EngineConfig {
     pub rlm_session: SharedRlmSession,
     /// Shared Duo session state.
     pub duo_session: SharedDuoSession,
+    /// Enable prompt caching for system prompts
+    pub cache_system: bool,
+    /// Enable prompt caching for tools
+    pub cache_tools: bool,
 }
 
 impl Default for EngineConfig {
@@ -93,6 +100,8 @@ impl Default for EngineConfig {
             plan_state: new_shared_plan_state(),
             rlm_session: Arc::new(Mutex::new(RlmSession::default())),
             duo_session: Arc::new(Mutex::new(DuoSession::new())),
+            cache_system: true, // Enable by default
+            cache_tools: true,  // Enable by default
         }
     }
 }
@@ -842,6 +851,49 @@ impl Engine {
         }
     }
 
+    /// Apply prompt caching to system prompt
+    fn cache_system_prompt(system: Option<SystemPrompt>, cache: bool) -> Option<SystemPrompt> {
+        if !cache {
+            return system;
+        }
+        match system {
+            Some(SystemPrompt::Text(text)) => Some(SystemPrompt::Blocks(vec![SystemBlock {
+                block_type: "text".to_string(),
+                text,
+                cache_control: Some(CacheControl {
+                    cache_type: "ephemeral".to_string(),
+                }),
+            }])),
+            Some(SystemPrompt::Blocks(blocks)) => {
+                let cached_blocks: Vec<SystemBlock> = blocks
+                    .into_iter()
+                    .map(|mut block| {
+                        block.cache_control = Some(CacheControl {
+                            cache_type: "ephemeral".to_string(),
+                        });
+                        block
+                    })
+                    .collect();
+                Some(SystemPrompt::Blocks(cached_blocks))
+            }
+            None => None,
+        }
+    }
+
+    /// Apply prompt caching to tools
+    fn cache_tools(tools: Option<Vec<Tool>>, cache: bool) -> Option<Vec<Tool>> {
+        if !cache {
+            return tools;
+        }
+        let mut tools = tools?;
+        for tool in &mut tools {
+            tool.cache_control = Some(CacheControl {
+                cache_type: "ephemeral".to_string(),
+            });
+        }
+        Some(tools)
+    }
+
     /// Handle a turn using the Anthropic API (original implementation)
     #[allow(clippy::too_many_lines)]
     async fn handle_anthropic_turn(
@@ -870,13 +922,45 @@ impl Engine {
                 break;
             }
 
+            // Check for context compaction (if conversation is getting long)
+            let compaction_config = CompactionConfig::default();
+            let (messages_for_request, system_for_request, was_compacted) = maybe_compact(
+                &client,
+                &self.session.messages,
+                &self.session.system_prompt,
+                &tools,
+                &compaction_config,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                logging::warn(format!("Compaction failed: {e}"));
+                (
+                    self.session.messages.clone(),
+                    self.session.system_prompt.clone(),
+                    false,
+                )
+            });
+
+            // Emit compaction event if it happened
+            if was_compacted {
+                let _ = self
+                    .tx_event
+                    .send(Event::status("Context compacted for longer conversation"))
+                    .await;
+            }
+
+            // Apply prompt caching to system prompt and tools
+            let cached_system =
+                Self::cache_system_prompt(system_for_request, self.config.cache_system);
+            let cached_tools = Self::cache_tools(tools.clone(), self.config.cache_tools);
+
             // Build the request
             let request = MessageRequest {
                 model: self.session.model.clone(),
-                messages: self.session.messages.clone(),
+                messages: messages_for_request,
                 max_tokens: 4096,
-                system: self.session.system_prompt.clone(),
-                tools: tools.clone(),
+                system: cached_system,
+                tools: cached_tools,
                 tool_choice: if tools.is_some() {
                     Some(json!({ "type": "auto" }))
                 } else {

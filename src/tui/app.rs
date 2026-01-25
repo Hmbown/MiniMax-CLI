@@ -250,6 +250,15 @@ pub struct App {
     pub last_prompt_tokens: Option<u32>,
     /// Last completion token usage
     pub last_completion_tokens: Option<u32>,
+    /// Timestamp for last token usage update
+    pub last_usage_at: Option<Instant>,
+    /// Current process/status being displayed (e.g., "Reading files...", "Analyzing code...")
+    pub current_process: Option<String>,
+    /// Recently accessed files for the status footer
+    pub recent_files: Vec<PathBuf>,
+    /// Maximum recent files to track
+    #[allow(dead_code)]
+    pub max_recent_files: usize,
 }
 
 /// Message queued while the engine is busy.
@@ -460,6 +469,10 @@ impl App {
             turn_started_at: None,
             last_prompt_tokens: None,
             last_completion_tokens: None,
+            last_usage_at: None,
+            current_process: None,
+            recent_files: Vec::new(),
+            max_recent_files: 10,
         }
     }
 
@@ -816,6 +829,63 @@ impl App {
         }
         if let Ok(mut todos) = self.todos.lock() {
             todos.clear();
+        }
+    }
+
+    /// Set the current process message for the status footer
+    #[allow(dead_code)]
+    pub fn set_process(&mut self, message: Option<String>) {
+        self.current_process = message;
+    }
+
+    /// Add a file to the recent files list for the status footer
+    #[allow(dead_code)]
+    pub fn add_recent_file(&mut self, path: PathBuf) {
+        // Remove if already exists (to avoid duplicates)
+        self.recent_files.retain(|p| p != &path);
+        // Add to front
+        self.recent_files.insert(0, path);
+        // Trim to max
+        if self.recent_files.len() > self.max_recent_files {
+            self.recent_files.truncate(self.max_recent_files);
+        }
+    }
+
+    /// Get formatted recent files for display
+    pub fn recent_files_display(&self, max_names: usize) -> String {
+        if max_names == 0 || self.recent_files.is_empty() {
+            return String::new();
+        }
+
+        let count = self.recent_files.len();
+        if count > max_names {
+            let suffix = if count == 1 { "file" } else { "files" };
+            return format!("{count} {suffix}");
+        }
+
+        self.recent_files
+            .iter()
+            .take(max_names)
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// Get todo progress summary
+    pub fn todo_summary(&self) -> String {
+        if let Ok(todos) = self.todos.lock() {
+            let items = todos.items();
+            let total = items.len();
+            if total == 0 {
+                return String::new();
+            }
+            let completed = items
+                .iter()
+                .filter(|t| t.status == crate::tools::todo::TodoStatus::Completed)
+                .count();
+            format!("[{}/{}]", completed, total)
+        } else {
+            String::new()
         }
     }
 }

@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::fs;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
@@ -32,7 +32,7 @@ use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
 use crate::core::ops::Op;
 use crate::hooks::HookEvent;
-use crate::models::{ContentBlock, Message, SystemPrompt, context_window_for_model};
+use crate::models::{ContentBlock, Message, SystemPrompt};
 use crate::palette;
 use crate::prompts;
 use crate::rlm;
@@ -43,7 +43,6 @@ use crate::tui::event_broker::EventBroker;
 use crate::tui::paste_burst::CharDecision;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
 use crate::tui::selection::TranscriptSelectionPoint;
-use crate::utils::estimate_message_chars;
 
 use super::app::{App, AppAction, AppMode, OnboardingState, QueuedMessage, TuiOptions};
 use super::approval::{ApprovalMode, ApprovalRequest, ApprovalView, ReviewDecision};
@@ -185,6 +184,8 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         plan_state: app.plan_state.clone(),
         rlm_session: app.rlm_session.clone(),
         duo_session: app.duo_session.clone(),
+        cache_system: true,
+        cache_tools: true,
     };
 
     // Spawn the Engine - it will handle all API communication
@@ -367,6 +368,7 @@ async fn run_event_loop(
                             app.total_conversation_tokens.saturating_add(turn_tokens);
                         app.last_prompt_tokens = Some(usage.input_tokens);
                         app.last_completion_tokens = Some(usage.output_tokens);
+                        app.last_usage_at = Some(Instant::now());
 
                         // Auto-save session after each turn
                         if let Ok(manager) = SessionManager::default_location() {
@@ -1254,15 +1256,19 @@ fn clean_query_prefix(prefix: &str) -> &str {
 }
 
 fn load_file_into_rlm(app: &mut App, path: &Path) -> Result<AutoRlmLoaded, String> {
-    let mut session = app
-        .rlm_session
-        .lock()
-        .map_err(|_| "Failed to access RLM session".to_string())?;
-    let base_id = rlm::context_id_from_path(path);
-    let context_id = rlm::unique_context_id(&session, &base_id);
-    let (line_count, char_count) = session
-        .load_file(&context_id, path)
-        .map_err(|err| err.to_string())?;
+    let (context_id, line_count, char_count) = {
+        let mut session = app
+            .rlm_session
+            .lock()
+            .map_err(|_| "Failed to access RLM session".to_string())?;
+        let base_id = rlm::context_id_from_path(path);
+        let context_id = rlm::unique_context_id(&session, &base_id);
+        let (line_count, char_count) = session
+            .load_file(&context_id, path)
+            .map_err(|err| err.to_string())?;
+        (context_id, line_count, char_count)
+    };
+    app.add_recent_file(path.to_path_buf());
     Ok(AutoRlmLoaded {
         context_id,
         line_count,
@@ -1470,7 +1476,11 @@ fn render(f: &mut Frame, app: &mut App) {
     }
 
     let header_height = 1;
-    let footer_height = 1;
+    // Footer is 2 lines when showing status info, 1 line otherwise
+    let show_status_footer = app.current_process.is_some()
+        || !app.recent_files.is_empty()
+        || app.todo_summary().is_empty() == false;
+    let footer_height = if show_status_footer { 2 } else { 1 };
     let queued_preview = app.queued_message_previews(MAX_QUEUED_PREVIEW);
     let queued_lines = if queued_preview.is_empty() {
         0
@@ -1674,78 +1684,252 @@ fn render_status_indicator(f: &mut Frame, area: Rect, app: &App, queued: &[Strin
     f.render_widget(paragraph, area);
 }
 
-fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let mut spans = vec![
-        Span::styled(
-            format!(" {} ", app.mode.label()),
-            mode_badge_style(app.mode),
-        ),
-        Span::raw(" | "),
-        Span::styled(
-            context_indicator(app),
-            Style::default().fg(palette::TEXT_MUTED),
-        ),
-    ];
-
-    if let Some((label, style)) = rlm_usage_badge(app) {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(label, style));
+fn push_footer_span<'a>(
+    spans: &mut Vec<Span<'a>>,
+    used: &mut usize,
+    available: usize,
+    separator: &'a str,
+    separator_style: Style,
+    span: Span<'a>,
+    allow_truncate: bool,
+) -> bool {
+    if available == 0 {
+        return false;
     }
 
-    if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens) {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            format!("last tokens in/out: {prompt}/{completion}"),
-            Style::default().fg(palette::TEXT_MUTED),
-        ));
+    let sep_width = if spans.is_empty() {
+        0
+    } else {
+        separator.width()
+    };
+    let span_width = span.content.width();
+    let total = used.saturating_add(sep_width).saturating_add(span_width);
+    if total <= available {
+        if sep_width > 0 {
+            spans.push(Span::styled(separator, separator_style));
+            *used = used.saturating_add(sep_width);
+        }
+        spans.push(span);
+        *used = used.saturating_add(span_width);
+        return true;
+    }
+
+    if allow_truncate {
+        let remaining = available.saturating_sub(used.saturating_add(sep_width));
+        if remaining == 0 {
+            return false;
+        }
+        let truncated = truncate_line_to_width(span.content.as_ref(), remaining);
+        if truncated.is_empty() {
+            return false;
+        }
+        if sep_width > 0 {
+            spans.push(Span::styled(separator, separator_style));
+            *used = used.saturating_add(sep_width);
+        }
+        spans.push(Span::styled(truncated, span.style));
+        *used = used.saturating_add(remaining);
+        return true;
+    }
+
+    false
+}
+
+fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    // Determine if we should show the status footer (2 lines)
+    let show_status_footer = app.current_process.is_some()
+        || !app.recent_files.is_empty()
+        || app.todo_summary().is_empty() == false;
+
+    if show_status_footer && area.height >= 2 {
+        // Render status footer (line 1: process, files, tasks)
+        let status_area = Rect::new(area.x, area.y, area.width, 1);
+        let mut status_spans = Vec::new();
+        let mut used = 0usize;
+        let available = status_area.width as usize;
+        let separator_style = Style::default();
+
+        // Current process indicator
+        if let Some(ref process) = app.current_process {
+            let span = Span::styled(
+                format!("⚡ {}", process),
+                Style::default()
+                    .fg(palette::MINIMAX_BLUE)
+                    .add_modifier(Modifier::BOLD),
+            );
+            push_footer_span(
+                &mut status_spans,
+                &mut used,
+                available,
+                " ",
+                separator_style,
+                span,
+                true,
+            );
+        }
+
+        // Todo summary
+        let todo_summary = app.todo_summary();
+        if !todo_summary.is_empty() {
+            let span = Span::styled(
+                format!("📋 {}", todo_summary),
+                Style::default().fg(palette::TEXT_MUTED),
+            );
+            push_footer_span(
+                &mut status_spans,
+                &mut used,
+                available,
+                " ",
+                separator_style,
+                span,
+                false,
+            );
+        }
+
+        // Recent files
+        let max_recent_names = if available < 70 { 1 } else { 2 };
+        let files_display = app.recent_files_display(max_recent_names);
+        if !files_display.is_empty() {
+            let span = Span::styled(
+                format!("📁 {}", files_display),
+                Style::default().fg(palette::TEXT_MUTED),
+            );
+            push_footer_span(
+                &mut status_spans,
+                &mut used,
+                available,
+                " ",
+                separator_style,
+                span,
+                true,
+            );
+        }
+
+        let status_line = Paragraph::new(Line::from(status_spans));
+        f.render_widget(status_line, status_area);
+
+        // Render command footer on line 2
+        let command_area = Rect::new(area.x, area.y + 1, area.width, 1);
+        render_command_footer(f, command_area, app);
+    } else {
+        // Just render the command footer on single line
+        render_command_footer(f, area, app);
+    }
+}
+
+fn render_command_footer(f: &mut Frame, area: Rect, app: &App) {
+    let available = area.width as usize;
+    let mut spans = Vec::new();
+    let mut used = 0usize;
+    let separator_style = Style::default().fg(palette::TEXT_MUTED);
+
+    let mode_span = Span::styled(
+        format!(" {} ", app.mode.label()),
+        mode_badge_style(app.mode),
+    );
+    push_footer_span(
+        &mut spans,
+        &mut used,
+        available,
+        " | ",
+        separator_style,
+        mode_span,
+        true,
+    );
+
+    let show_metrics = app.status_message.is_none() && !app.is_loading;
+    if show_metrics {
+        if let Some((label, style)) = rlm_usage_badge(app) {
+            let span = Span::styled(label, style);
+            push_footer_span(
+                &mut spans,
+                &mut used,
+                available,
+                " | ",
+                separator_style,
+                span,
+                true,
+            );
+        }
+
+        if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens)
+            && should_show_last_tokens(app)
+        {
+            let span = Span::styled(
+                format!("last {prompt}/{completion}"),
+                Style::default().fg(palette::TEXT_MUTED),
+            );
+            push_footer_span(
+                &mut spans,
+                &mut used,
+                available,
+                " | ",
+                separator_style,
+                span,
+                true,
+            );
+        }
     }
 
     let can_scroll = app.last_transcript_total > app.last_transcript_visible;
     if can_scroll {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            "Alt+Up/Down scroll",
-            Style::default().fg(palette::TEXT_MUTED),
-        ));
-    }
-
-    if can_scroll && !matches!(app.transcript_scroll, TranscriptScroll::ToBottom) {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            "PgUp/PgDn/Home/End",
-            Style::default().fg(palette::TEXT_MUTED),
-        ));
-        if app.last_transcript_total > 0 {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!(
-                    "{}/{}",
-                    app.last_transcript_top + 1,
-                    app.last_transcript_total
-                ),
-                Style::default().fg(palette::TEXT_MUTED),
-            ));
-        }
+        let at_bottom = matches!(app.transcript_scroll, TranscriptScroll::ToBottom);
+        let scroll_label = if at_bottom {
+            "Alt+Up/Down scroll".to_string()
+        } else if app.last_transcript_total > 0 {
+            format!(
+                "PgUp/PgDn/Home/End {}/{}",
+                app.last_transcript_top + 1,
+                app.last_transcript_total
+            )
+        } else {
+            "PgUp/PgDn/Home/End".to_string()
+        };
+        let span = Span::styled(scroll_label, Style::default().fg(palette::TEXT_MUTED));
+        push_footer_span(
+            &mut spans,
+            &mut used,
+            available,
+            " | ",
+            separator_style,
+            span,
+            true,
+        );
     }
 
     if app.transcript_selection.is_active() {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            copy_selection_hint(),
-            Style::default().fg(palette::TEXT_MUTED),
-        ));
+        let span = Span::styled(copy_selection_hint(), Style::default().fg(palette::TEXT_MUTED));
+        push_footer_span(
+            &mut spans,
+            &mut used,
+            available,
+            " | ",
+            separator_style,
+            span,
+            true,
+        );
     }
 
     if let Some(ref msg) = app.status_message {
-        spans.push(Span::raw(" | "));
-        spans.push(Span::styled(
-            msg,
-            Style::default().fg(palette::STATUS_WARNING),
-        ));
+        let span = Span::styled(msg, Style::default().fg(palette::STATUS_WARNING));
+        push_footer_span(
+            &mut spans,
+            &mut used,
+            available,
+            " | ",
+            separator_style,
+            span,
+            true,
+        );
     }
 
     let footer = Paragraph::new(Line::from(spans));
     f.render_widget(footer, area);
+}
+
+fn should_show_last_tokens(app: &App) -> bool {
+    app.last_usage_at
+        .is_some_and(|when| when.elapsed() <= Duration::from_secs(10))
 }
 
 fn rlm_usage_badge(app: &App) -> Option<(String, Style)> {
@@ -1761,6 +1945,10 @@ fn rlm_usage_badge(app: &App) -> Option<(String, Style)> {
     let hard = usage.queries >= RLM_BUDGET_HARD_QUERIES
         || usage.input_tokens >= RLM_BUDGET_HARD_INPUT_TOKENS
         || usage.output_tokens >= RLM_BUDGET_HARD_OUTPUT_TOKENS;
+
+    if !warn && !hard && app.mode != AppMode::Rlm {
+        return None;
+    }
 
     let style = if hard {
         Style::default()
@@ -1814,46 +2002,6 @@ fn prompt_for_mode(mode: AppMode, rlm_repl_active: bool) -> &'static str {
         }
         AppMode::Duo => "duo> ",
     }
-}
-
-fn context_indicator(app: &App) -> String {
-    let used = if app.total_conversation_tokens > 0 {
-        Some(i64::from(app.total_conversation_tokens))
-    } else {
-        estimated_context_tokens(app)
-    };
-
-    if let Some(max) = context_window_for_model(&app.model) {
-        if let Some(used) = used {
-            let max_i64 = i64::from(max);
-            let remaining = (max_i64 - used).max(0);
-            let percent = ((remaining.saturating_mul(100) + max_i64 / 2) / max_i64).clamp(0, 100);
-            format!("{percent}% context left")
-        } else {
-            "100% context left".to_string()
-        }
-    } else if let Some(used) = used {
-        format!("{used} used")
-    } else {
-        "100% context left".to_string()
-    }
-}
-
-fn estimated_context_tokens(app: &App) -> Option<i64> {
-    let mut total_chars = estimate_message_chars(&app.api_messages);
-
-    match &app.system_prompt {
-        Some(SystemPrompt::Text(text)) => total_chars = total_chars.saturating_add(text.len()),
-        Some(SystemPrompt::Blocks(blocks)) => {
-            for block in blocks {
-                total_chars = total_chars.saturating_add(block.text.len());
-            }
-        }
-        None => {}
-    }
-
-    let estimated_tokens = total_chars / 4;
-    i64::try_from(estimated_tokens).ok()
 }
 
 fn format_elapsed(start: Instant) -> String {
@@ -2386,6 +2534,7 @@ fn format_subagent_status(status: &SubAgentStatus) -> String {
 #[allow(clippy::too_many_lines)]
 fn handle_tool_call_started(app: &mut App, id: &str, name: &str, input: &serde_json::Value) {
     let id = id.to_string();
+    track_recent_file_from_tool(app, name, input);
     if is_exploring_tool(name) {
         let label = exploring_label(name, input);
         let cell_index = if let Some(idx) = app.exploring_cell {
@@ -2702,6 +2851,40 @@ fn is_exec_tool(name: &str) -> bool {
         name,
         "exec_shell" | "exec_shell_wait" | "exec_shell_interact" | "exec_wait" | "exec_interact"
     )
+}
+
+fn track_recent_file_from_tool(app: &mut App, name: &str, input: &serde_json::Value) {
+    let path = match name {
+        "read_file" | "write_file" | "edit_file" | "apply_patch" => input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .and_then(|p| normalize_recent_path(p, &app.workspace)),
+        "view_image" | "view_image_file" | "view_image_tool" => input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .and_then(|p| normalize_recent_path(p, &app.workspace)),
+        _ => None,
+    };
+
+    if let Some(path) = path {
+        app.add_recent_file(path);
+    }
+}
+
+fn normalize_recent_path(raw: &str, workspace: &Path) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "<file>" || trimmed == "." || trimmed == "./" {
+        return None;
+    }
+    if trimmed.contains("://") {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        workspace.join(path)
+    })
 }
 
 fn exploring_label(name: &str, input: &serde_json::Value) -> String {

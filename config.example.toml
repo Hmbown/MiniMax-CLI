@@ -81,14 +81,32 @@ exponential_base = 2.0
 # cache_summary = true             # Cache the summary block
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# RLM Sandbox Configuration (PLANNED - not yet implemented)
+# RLM Sandbox Configuration
 # ─────────────────────────────────────────────────────────────────────────────────
-# [rlm]
-# max_context_chars = 10000000     # Max characters for context (10MB)
-# max_search_results = 100         # Max search results
-# default_chunk_size = 2000        # Default chunk size
-# default_overlap = 200            # Default chunk overlap
-# session_dir = "~/.minimax/rlm"   # Directory for RLM sessions
+[rlm]
+max_context_chars = 10000000     # Max characters for context (10MB)
+max_search_results = 100         # Max search results
+default_chunk_size = 2000        # Default chunk size
+default_overlap = 200            # Default chunk overlap
+session_dir = "~/.minimax/rlm"   # Directory for RLM sessions
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Duo Mode Configuration
+# ─────────────────────────────────────────────────────────────────────────────────
+[duo]
+max_turns = 10                   # Max turns before timeout
+approval_threshold = 0.9         # Score needed for approval (0-1)
+default_max_tokens = 8192        # Default max tokens for Duo requests
+coach_temperature = 0.3          # Temperature for coach validation
+player_temperature = 0.7         # Temperature for player implementation
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# Coding API Configuration
+# ─────────────────────────────────────────────────────────────────────────────────
+# Use a separate API key and endpoint for coding tasks
+# api_key_2 = "YOUR_CODING_API_KEY"           # Optional: separate coding API key
+# base_url_2 = "https://api.minimax.io"       # Optional: separate coding endpoint
+# default_coding_model = "MiniMax-M2.1-Coding" # Model for coding tasks
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Profile Example (for multiple environments)

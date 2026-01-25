@@ -1,14 +1,21 @@
 //! Context compaction for long conversations.
-//! NOTE: Not yet integrated into the engine - planned feature.
+//!
+//! This module provides automatic context management for extended conversations:
+//! - Token estimation using character-based approximation
+//! - Automatic compaction when conversations exceed thresholds
+//! - Summary-based context reduction preserving key information
+//!
+//! Integration: Call `maybe_compact()` before each API request to check if
+//! compaction is needed. If so, it will summarize older messages and return
+//! a compacted message history.
 
-#![allow(dead_code)]
-
+use crate::logging;
 use anyhow::Result;
 use std::fmt::Write;
 
 use crate::client::AnthropicClient;
 use crate::models::{
-    CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
+    CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt, Tool,
 };
 
 /// Configuration for conversation compaction behavior.
@@ -19,33 +26,55 @@ pub struct CompactionConfig {
     pub message_threshold: usize,
     pub model: String,
     pub cache_summary: bool,
+    /// Keep this many recent messages unsummarized
+    pub keep_recent: usize,
 }
 
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            token_threshold: 50000,
-            message_threshold: 50,
+            enabled: true,          // Enable by default for better UX
+            token_threshold: 80000, // 80K tokens ~ 320K chars
+            message_threshold: 30,  // After 30 messages
             model: "MiniMax-M2.1".to_string(),
             cache_summary: true,
+            keep_recent: 6, // Keep last 6 messages as-is
         }
     }
 }
 
 pub fn estimate_tokens(messages: &[Message]) -> usize {
-    // Rough estimate: ~4 chars per token
+    // Better estimate: varies by content type
+    // - English text: ~4 chars per token
+    // - Code: ~3.5 chars per token
+    // - JSON/tool data: ~2.5 chars per token
     messages
         .iter()
         .map(|m| {
             m.content
                 .iter()
                 .map(|c| match c {
-                    ContentBlock::Text { text, .. } => text.len() / 4,
+                    ContentBlock::Text { text, .. } => {
+                        // Estimate: check if it looks like code (many brackets/parens)
+                        let is_code = text
+                            .chars()
+                            .filter(|&c| {
+                                c == '{' || c == '}' || c == '[' || c == ']' || c == '(' || c == ')'
+                            })
+                            .count()
+                            > text.len() / 20;
+                        if is_code {
+                            text.len() / 3
+                        } else {
+                            text.len() / 4
+                        }
+                    }
                     ContentBlock::Thinking { thinking } => thinking.len() / 4,
-                    ContentBlock::ToolUse { input, .. } => serde_json::to_string(input)
-                        .map(|s| s.len() / 4)
-                        .unwrap_or(100),
+                    ContentBlock::ToolUse { input, .. } => {
+                        let json = serde_json::to_string(input).unwrap_or_default();
+                        // JSON is more token-dense
+                        json.len() / 2
+                    }
                     ContentBlock::ToolResult { content, .. } => content.len() / 4,
                 })
                 .sum::<usize>()
@@ -53,6 +82,43 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
         .sum()
 }
 
+/// Estimate tokens for system prompt content
+pub fn estimate_system_tokens(system: &Option<SystemPrompt>) -> usize {
+    match system {
+        Some(SystemPrompt::Text(text)) => text.len() / 4,
+        Some(SystemPrompt::Blocks(blocks)) => blocks.iter().map(|b| b.text.len() / 4).sum(),
+        None => 0,
+    }
+}
+
+/// Estimate tokens for tools array
+pub fn estimate_tools_tokens(tools: &Option<Vec<Tool>>) -> usize {
+    match tools {
+        Some(tools) => tools
+            .iter()
+            .map(|t| {
+                // Tool name, description, and input schema
+                t.name.len() / 4
+                    + t.description.len() / 4
+                    + serde_json::to_string(&t.input_schema)
+                        .map(|s| s.len() / 4)
+                        .unwrap_or(0)
+            })
+            .sum(),
+        None => 0,
+    }
+}
+
+/// Total estimated tokens for a request (messages + system + tools)
+pub fn estimate_request_tokens(
+    messages: &[Message],
+    system: &Option<SystemPrompt>,
+    tools: &Option<Vec<Tool>>,
+) -> usize {
+    estimate_tokens(messages) + estimate_system_tokens(system) + estimate_tools_tokens(tools)
+}
+
+#[allow(dead_code)]
 pub fn should_compact(messages: &[Message], config: &CompactionConfig) -> bool {
     if !config.enabled {
         return false;
@@ -73,8 +139,8 @@ pub async fn compact_messages(
         return Ok((Vec::new(), None));
     }
 
-    // Keep the last few messages as-is
-    let keep_recent = 4;
+    // Keep the last few messages as-is (use config setting)
+    let keep_recent = config.keep_recent;
     let (to_summarize, recent) = if messages.len() <= keep_recent {
         return Ok((messages.to_vec(), None));
     } else {
@@ -227,4 +293,61 @@ pub fn merge_system_prompts(
             Some(SystemPrompt::Blocks(blocks))
         }
     }
+}
+
+/// Integration helper: Check if compaction is needed and apply it.
+///
+/// Returns a tuple of (compacted_messages, new_system_prompt, was_compacted)
+/// If compaction is not needed, returns (messages.clone(), system.clone(), false)
+///
+/// # Arguments
+/// * `client` - AnthropicClient for making summary API calls
+/// * `messages` - Current conversation messages
+/// * `system` - Current system prompt
+/// * `tools` - Current tools (for token estimation)
+/// * `config` - Compaction configuration
+pub async fn maybe_compact(
+    client: &AnthropicClient,
+    messages: &[Message],
+    system: &Option<SystemPrompt>,
+    tools: &Option<Vec<Tool>>,
+    config: &CompactionConfig,
+) -> Result<(Vec<Message>, Option<SystemPrompt>, bool)> {
+    if !config.enabled {
+        return Ok((messages.to_vec(), system.clone(), false));
+    }
+
+    // Estimate total request tokens
+    let total_tokens = estimate_request_tokens(messages, system, tools);
+    let message_count = messages.len();
+
+    let should_compact =
+        total_tokens > config.token_threshold || message_count > config.message_threshold;
+
+    if !should_compact {
+        return Ok((messages.to_vec(), system.clone(), false));
+    }
+
+    // Log compaction attempt
+    logging::info(format!(
+        "Context compaction triggered: {} tokens (threshold: {}), {} messages (threshold: {})",
+        total_tokens, config.token_threshold, message_count, config.message_threshold
+    ));
+
+    // Perform compaction
+    let (compacted_messages, summary_prompt) = compact_messages(client, messages, config).await?;
+
+    // Merge with original system prompt
+    let merged_system = merge_system_prompts(system.as_ref(), summary_prompt);
+
+    // Count compacted messages
+    let original_count = messages.len();
+    let new_count = compacted_messages.len();
+
+    logging::info(format!(
+        "Compaction complete: {} messages -> {} messages (kept {} recent)",
+        original_count, new_count, config.keep_recent
+    ));
+
+    Ok((compacted_messages, merged_system, true))
 }

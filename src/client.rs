@@ -455,3 +455,138 @@ impl LlmClient for AnthropicClient {
         Ok(Pin::from(Box::new(stream)))
     }
 }
+
+// === MiniMaxCodingClient ===
+
+/// Client for MiniMax Coding API requests with dedicated endpoint and model.
+///
+/// This client is optimized for coding tasks and uses a separate API endpoint
+/// and model configuration from the standard MiniMax API.
+#[derive(Clone)]
+#[must_use]
+pub struct MiniMaxCodingClient {
+    http_client: reqwest::Client,
+    base_url: String,
+    retry: RetryPolicy,
+    default_model: String,
+}
+
+impl MiniMaxCodingClient {
+    /// Create a MiniMax Coding client from CLI configuration.
+    pub fn new(config: &Config) -> Result<Self> {
+        let api_key = config.coding_api_key()?;
+        let base_url = config.coding_base_url();
+        let model = config.coding_model();
+        let retry = config.retry_policy();
+
+        logging::info(format!("MiniMax Coding API base URL: {base_url}"));
+        logging::info(format!("MiniMax Coding model: {model}"));
+        logging::info(format!(
+            "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
+            retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
+        ));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {api_key}"))?,
+        );
+
+        let http_client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()?;
+
+        Ok(Self {
+            http_client,
+            base_url,
+            retry,
+            default_model: model,
+        })
+    }
+
+    /// Get the default model name
+    #[must_use]
+    pub fn default_model(&self) -> &str {
+        &self.default_model
+    }
+
+    /// Create a non-streaming coding message request.
+    pub async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
+        let url = format!("{}/v1/messages", self.base_url);
+        let mut request = request;
+        request.stream = Some(false);
+
+        let response =
+            send_with_retry(&self.retry, || self.http_client.post(&url).json(&request)).await?;
+        Ok(response.json::<MessageResponse>().await?)
+    }
+
+    /// Create a streaming coding message request.
+    #[allow(dead_code)]
+    pub async fn create_message_stream(
+        &self,
+        request: MessageRequest,
+    ) -> Result<impl futures_util::Stream<Item = Result<StreamEvent>>> {
+        let url = format!("{}/v1/messages", self.base_url);
+        let mut request = request;
+        request.stream = Some(true);
+
+        let response =
+            send_with_retry(&self.retry, || self.http_client.post(&url).json(&request)).await?;
+
+        Ok(parse_sse_stream(response.bytes_stream()))
+    }
+
+    /// Create a coding-specific request with optimized settings.
+    ///
+    /// This helper method creates a request configured for coding tasks,
+    /// with appropriate default parameters for code generation.
+    #[allow(dead_code)]
+    pub fn create_coding_request(
+        &self,
+        messages: Vec<crate::models::Message>,
+        system_prompt: Option<String>,
+        max_tokens: Option<u32>,
+    ) -> MessageRequest {
+        MessageRequest {
+            model: self.default_model.clone(),
+            messages,
+            max_tokens: max_tokens.unwrap_or(8192),
+            system: system_prompt.map(crate::models::SystemPrompt::Text),
+            tools: None,
+            tool_choice: None,
+            metadata: None,
+            thinking: None,
+            stream: Some(false),
+            temperature: Some(0.2), // Lower temperature for more deterministic code
+            top_p: Some(0.95),
+        }
+    }
+}
+
+impl LlmClient for MiniMaxCodingClient {
+    fn provider_name(&self) -> &'static str {
+        "minimax-coding"
+    }
+
+    fn model(&self) -> &str {
+        &self.default_model
+    }
+
+    async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
+        MiniMaxCodingClient::create_message(self, request).await
+    }
+
+    async fn create_message_stream(&self, request: MessageRequest) -> Result<StreamEventBox> {
+        let url = format!("{}/v1/messages", self.base_url);
+        let mut request = request;
+        request.stream = Some(true);
+
+        let response =
+            send_with_retry(&self.retry, || self.http_client.post(&url).json(&request)).await?;
+
+        let stream = parse_sse_stream(response.bytes_stream());
+        Ok(Pin::from(Box::new(stream)))
+    }
+}
