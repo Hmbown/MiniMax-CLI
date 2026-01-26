@@ -1852,7 +1852,8 @@ fn render_command_footer(f: &mut Frame, area: Rect, app: &App) {
             );
         }
 
-        if let (Some(prompt), Some(completion)) = (app.last_prompt_tokens, app.last_completion_tokens)
+        if let (Some(prompt), Some(completion)) =
+            (app.last_prompt_tokens, app.last_completion_tokens)
             && should_show_last_tokens(app)
         {
             let span = Span::styled(
@@ -1898,7 +1899,10 @@ fn render_command_footer(f: &mut Frame, area: Rect, app: &App) {
     }
 
     if app.transcript_selection.is_active() {
-        let span = Span::styled(copy_selection_hint(), Style::default().fg(palette::TEXT_MUTED));
+        let span = Span::styled(
+            copy_selection_hint(),
+            Style::default().fg(palette::TEXT_MUTED),
+        );
         push_footer_span(
             &mut spans,
             &mut used,
