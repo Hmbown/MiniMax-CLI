@@ -177,7 +177,7 @@ pub struct App {
     pub compact_threshold: usize,
     pub max_input_history: usize,
     pub total_tokens: u32,
-    /// Tokens used in the current conversation (reset on clear/load)
+    /// Estimated tokens currently in context (reset on clear/load)
     pub total_conversation_tokens: u32,
     pub allow_shell: bool,
     pub max_subagents: usize,
@@ -190,6 +190,8 @@ pub struct App {
     pub hooks: HookExecutor,
     #[allow(dead_code)]
     pub yolo: bool,
+    /// Shell mode - when true, input is executed as shell commands
+    pub shell_mode: bool,
     // Clipboard handler
     pub clipboard: ClipboardHandler,
     // Tool approval session allowlist
@@ -435,6 +437,7 @@ impl App {
             api_key_cursor: 0,
             hooks,
             yolo: initial_mode == AppMode::Yolo,
+            shell_mode: false,
             clipboard: ClipboardHandler::new(),
             approval_session_approved: HashSet::new(),
             approval_mode: if matches!(initial_mode, AppMode::Yolo | AppMode::Rlm | AppMode::Duo) {
@@ -541,6 +544,16 @@ impl App {
         self.set_mode(next);
     }
 
+    /// Toggle shell mode (Ctrl-X)
+    pub fn toggle_shell_mode(&mut self) {
+        self.shell_mode = !self.shell_mode;
+        self.status_message = Some(if self.shell_mode {
+            "Shell mode enabled (Ctrl-X to switch back to agent)".to_string()
+        } else {
+            "Agent mode enabled (Ctrl-X for shell mode)".to_string()
+        });
+    }
+
     /// Execute hooks for a specific event with the given context
     pub fn execute_hooks(&self, event: HookEvent, context: &HookContext) -> Vec<HookResult> {
         self.hooks.execute(event, context)
@@ -554,6 +567,17 @@ impl App {
             .with_model(&self.model)
             .with_session_id(self.hooks.session_id())
             .with_tokens(self.total_tokens)
+    }
+
+    /// Recalculate estimated tokens currently in context for the header meter.
+    pub fn recalculate_context_tokens(&mut self) {
+        let tools: Option<Vec<crate::models::Tool>> = None;
+        let estimated = crate::compaction::estimate_request_tokens(
+            &self.api_messages,
+            &self.system_prompt,
+            &tools,
+        );
+        self.total_conversation_tokens = u32::try_from(estimated).unwrap_or(u32::MAX);
     }
 
     pub fn add_message(&mut self, msg: HistoryCell) {
@@ -908,12 +932,15 @@ pub enum AppAction {
     },
     SendMessage(String),
     ListSubAgents,
+    /// Trigger manual context compaction
+    CompactContext,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::models::{ContentBlock, Message, SystemPrompt};
 
     fn test_options(yolo: bool) -> TuiOptions {
         TuiOptions {
@@ -936,5 +963,34 @@ mod tests {
     fn test_trust_mode_follows_yolo_on_startup() {
         let app = App::new(test_options(true), &Config::default());
         assert!(app.trust_mode);
+    }
+
+    #[test]
+    fn test_toggle_shell_mode_updates_status() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.toggle_shell_mode();
+        assert!(app.shell_mode);
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|s| s.contains("Shell mode enabled"))
+        );
+        app.toggle_shell_mode();
+        assert!(!app.shell_mode);
+    }
+
+    #[test]
+    fn test_recalculate_context_tokens_estimates_non_zero() {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.system_prompt = Some(SystemPrompt::Text("system prompt".to_string()));
+        app.api_messages.push(Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "hello world".to_string(),
+                cache_control: None,
+            }],
+        });
+        app.recalculate_context_tokens();
+        assert!(app.total_conversation_tokens > 0);
     }
 }

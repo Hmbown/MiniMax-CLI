@@ -636,6 +636,18 @@ impl RlmSession {
     pub fn record_query_usage(&mut self, usage: &Usage, chars_sent: usize, chars_received: usize) {
         self.usage.record(usage, chars_sent, chars_received);
     }
+
+    /// Get the number of loaded contexts
+    #[must_use]
+    pub fn context_count(&self) -> usize {
+        self.contexts.len()
+    }
+
+    /// Get total line count across all contexts
+    #[must_use]
+    pub fn total_line_count(&self) -> usize {
+        self.contexts.values().map(|ctx| ctx.line_count).sum()
+    }
 }
 
 pub fn context_id_from_path(path: &Path) -> String {

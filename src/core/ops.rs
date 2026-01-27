@@ -50,6 +50,9 @@ pub enum Op {
 
     /// Shutdown the engine
     Shutdown,
+
+    /// Trigger manual context compaction
+    CompactContext,
 }
 
 impl Op {

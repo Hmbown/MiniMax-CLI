@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use crate::models::Usage;
+use crate::models::{Message, SystemPrompt, Usage};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::SubAgentResult;
 
@@ -75,6 +75,12 @@ pub enum Event {
 
     /// Status message for UI display
     Status { message: String },
+
+    /// Engine session messages/system prompt were updated (e.g., compaction)
+    SessionUpdated {
+        messages: Vec<Message>,
+        system_prompt: Option<SystemPrompt>,
+    },
 
     /// Pause terminal input events (for interactive subprocesses)
     PauseEvents,

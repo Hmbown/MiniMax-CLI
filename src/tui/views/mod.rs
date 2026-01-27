@@ -203,10 +203,17 @@ impl ModalView for HelpView {
             "Keys:",
             Style::default().fg(palette::MINIMAX_ORANGE).bold(),
         )]));
-        help_lines.push(Line::from("  Enter        - Send message"));
-        help_lines.push(Line::from("  Esc          - Cancel request"));
+        help_lines.push(Line::from(
+            "  Enter        - Send message / Execute shell command",
+        ));
+        help_lines.push(Line::from("  Esc          - Cancel request / Clear input"));
         help_lines.push(Line::from("  Tab          - Cycle modes"));
         help_lines.push(Line::from("  Ctrl+C       - Exit"));
+        help_lines.push(Line::from("  Ctrl+X       - Toggle shell mode"));
+        help_lines.push(Line::from(
+            "  Ctrl+J       - Insert newline (multiline input)",
+        ));
+        help_lines.push(Line::from("  Ctrl+V       - Paste from clipboard"));
         help_lines.push(Line::from("  Up/Down      - Scroll this help"));
         help_lines.push(Line::from(""));
 

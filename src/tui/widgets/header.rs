@@ -23,6 +23,7 @@ pub struct HeaderData<'a> {
     pub context_max: Option<u32>,
     pub is_streaming: bool,
     pub background: ratatui::style::Color,
+    pub shell_mode: bool,
 }
 
 impl<'a> HeaderData<'a> {
@@ -43,7 +44,15 @@ impl<'a> HeaderData<'a> {
             context_max,
             is_streaming,
             background,
+            shell_mode: false,
         }
+    }
+
+    /// Set shell mode status.
+    #[must_use]
+    pub fn with_shell_mode(mut self, shell_mode: bool) -> Self {
+        self.shell_mode = shell_mode;
+        self
     }
 
     /// Calculate context usage as a percentage (0-100).
@@ -80,6 +89,17 @@ impl<'a> HeaderWidget<'a> {
 
     /// Build the mode badge span with color coding.
     fn mode_badge(&self) -> Span<'static> {
+        // Show SHELL mode when shell_mode is enabled
+        if self.data.shell_mode {
+            return Span::styled(
+                " SHELL ",
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .bg(palette::MINIMAX_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+
         let (label, bg_color) = match self.data.mode {
             AppMode::Normal => ("NORMAL", palette::MINIMAX_SLATE),
             AppMode::Plan => ("PLAN", palette::MINIMAX_ORANGE),
@@ -221,6 +241,7 @@ mod tests {
             context_max: Some(128_000),
             is_streaming: false,
             background: palette::MINIMAX_INK,
+            shell_mode: false,
         };
         assert_eq!(data.context_percent(), 50);
         assert_eq!(data.context_remaining_percent(), 50);
@@ -235,6 +256,7 @@ mod tests {
             context_max: Some(128_000),
             is_streaming: false,
             background: palette::MINIMAX_INK,
+            shell_mode: false,
         };
         assert_eq!(data.context_percent(), 0);
         assert_eq!(data.context_remaining_percent(), 100);
@@ -249,6 +271,7 @@ mod tests {
             context_max: None,
             is_streaming: false,
             background: palette::MINIMAX_INK,
+            shell_mode: false,
         };
         assert_eq!(data.context_percent(), 0);
         assert_eq!(data.context_remaining_percent(), 100);

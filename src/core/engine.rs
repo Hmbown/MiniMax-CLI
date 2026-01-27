@@ -20,7 +20,7 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::client::AnthropicClient;
-use crate::compaction::{CompactionConfig, maybe_compact};
+use crate::compaction::{CompactionConfig, compact_messages, maybe_compact, merge_system_prompts};
 use crate::config::Config;
 use crate::duo::{DuoSession, SharedDuoSession, session_summary as duo_session_summary};
 use crate::features::{Feature, Features};
@@ -538,6 +538,67 @@ impl Engine {
                 Op::Shutdown => {
                     break;
                 }
+                Op::CompactContext => {
+                    let Some(client) = self.anthropic_client.clone() else {
+                        let message = self.anthropic_client_error.as_deref().map_or_else(
+                            || "Cannot compact context: API client not configured".to_string(),
+                            |err| format!("Cannot compact context: {err}"),
+                        );
+                        let _ = self.tx_event.send(Event::error(message, false)).await;
+                        continue;
+                    };
+
+                    // Manual compaction should force a summary when possible.
+                    let config = CompactionConfig {
+                        model: self.session.model.clone(),
+                        keep_recent: 4,
+                        ..CompactionConfig::default()
+                    };
+
+                    if self.session.messages.len() <= config.keep_recent {
+                        let _ = self
+                            .tx_event
+                            .send(Event::status(
+                                "Not enough messages to compact yet".to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
+
+                    match compact_messages(&client, &self.session.messages, &config).await {
+                        Ok((messages, summary_prompt)) => {
+                            let merged_system = merge_system_prompts(
+                                self.session.system_prompt.as_ref(),
+                                summary_prompt,
+                            );
+
+                            self.session.messages = messages;
+                            self.session.system_prompt = merged_system;
+
+                            let _ = self
+                                .tx_event
+                                .send(Event::SessionUpdated {
+                                    messages: self.session.messages.clone(),
+                                    system_prompt: self.session.system_prompt.clone(),
+                                })
+                                .await;
+
+                            let _ = self
+                                .tx_event
+                                .send(Event::status("Context compacted successfully".to_string()))
+                                .await;
+                        }
+                        Err(err) => {
+                            let _ = self
+                                .tx_event
+                                .send(Event::error(
+                                    format!("Failed to compact context: {err}"),
+                                    false,
+                                ))
+                                .await;
+                        }
+                    }
+                }
             }
         }
     }
@@ -943,6 +1004,18 @@ impl Engine {
 
             // Emit compaction event if it happened
             if was_compacted {
+                // Persist compaction so we don't re-summarize every turn.
+                self.session.messages = messages_for_request.clone();
+                self.session.system_prompt = system_for_request.clone();
+
+                let _ = self
+                    .tx_event
+                    .send(Event::SessionUpdated {
+                        messages: self.session.messages.clone(),
+                        system_prompt: self.session.system_prompt.clone(),
+                    })
+                    .await;
+
                 let _ = self
                     .tx_event
                     .send(Event::status("Context compacted for longer conversation"))

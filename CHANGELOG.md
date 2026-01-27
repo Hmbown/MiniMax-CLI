@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-27
+
+### Added
+- **Shell Mode**: Press Ctrl-X to toggle between Agent and Shell mode
+  - Execute shell commands directly without AI processing
+  - Visual SHELL badge in header when active
+  - Cross-platform support (macOS, Linux, Windows)
+  - Applies command safety analysis and sandboxing when available
+- New slash commands:
+  - `/debug` - Show comprehensive debug information (session, context, settings)
+  - `/reload` - Reload configuration from disk without restarting
+  - `/usage` - Display API usage and quota information
+- Enhanced `/compact` command with manual compaction (`/compact now`)
+- Keyboard shortcuts:
+  - Ctrl-X - Toggle shell mode
+  - Ctrl-J - Insert newline for multiline input
+- Updated help view with all new keyboard shortcuts
+
+### Changed
+- Header widget now shows shell mode status
+- Improved status messages for configuration commands
+- Context compaction now persists and updates the UI context meter
+
 ## [0.3.0] - 2026-01-25
 
 ### Added
@@ -117,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Hmbown/MiniMax-CLI/compare/v0.2.0...v0.2.1

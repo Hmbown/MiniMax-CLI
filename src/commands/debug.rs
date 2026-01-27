@@ -1,9 +1,9 @@
-//! Debug commands: tokens, cost, system, context, undo, retry
+//! Debug commands: tokens, cost, system, context, undo, retry, debug
 
 use super::CommandResult;
 use crate::models::{SystemPrompt, context_window_for_model};
 use crate::pricing;
-use crate::tui::app::{App, AppAction};
+use crate::tui::app::{App, AppAction, AppMode};
 use crate::tui::history::HistoryCell;
 use crate::utils::estimate_message_chars;
 
@@ -180,4 +180,109 @@ pub fn retry(app: &mut App) -> CommandResult {
         }
         None => CommandResult::error("No previous request to retry"),
     }
+}
+
+/// Show comprehensive debug information
+pub fn debug_info(app: &mut App) -> CommandResult {
+    let mut output = String::new();
+
+    // Session info
+    output.push_str("Debug Information\n");
+    output.push_str("═══════════════════════════════════════\n\n");
+
+    // Session
+    output.push_str("Session:\n");
+    output.push_str(&format!(
+        "  Session ID:     {}\n",
+        app.current_session_id.as_deref().unwrap_or("(none)")
+    ));
+    output.push_str(&format!("  Messages:       {}\n", app.api_messages.len()));
+    output.push_str(&format!("  History cells:  {}\n", app.history.len()));
+    output.push_str(&format!("  Total tokens:   {}\n", app.total_tokens));
+    output.push_str(&format!("  Session cost:   ${:.4}\n", app.session_cost));
+    output.push_str(&format!("  Mode:           {:?}\n", app.mode));
+    output.push_str(&format!("  Model:          {}\n\n", app.model));
+
+    // Context
+    let context_size = context_window_for_model(&app.model).unwrap_or(128_000);
+    let total_chars = estimate_message_chars(&app.api_messages);
+    let estimated_tokens = total_chars / 4;
+    let usage_pct = (estimated_tokens as f64 / context_size as f64 * 100.0).min(100.0);
+
+    output.push_str("Context:\n");
+    output.push_str(&format!("  Context window: {}\n", context_size));
+    output.push_str(&format!("  Characters:     {}\n", total_chars));
+    output.push_str(&format!("  Est. tokens:    ~{}\n", estimated_tokens));
+    output.push_str(&format!("  Usage:          {:.1}%\n\n", usage_pct));
+
+    // Settings
+    output.push_str("Settings:\n");
+    output.push_str(&format!("  Auto-compact:   {}\n", app.auto_compact));
+    output.push_str(&format!("  Show thinking:  {}\n", app.show_thinking));
+    output.push_str(&format!("  Show tools:     {}\n", app.show_tool_details));
+    output.push_str(&format!("  Shell allowed:  {}\n", app.allow_shell));
+    output.push_str(&format!("  Trust mode:     {}\n", app.trust_mode));
+    output.push_str(&format!("  Approval mode:  {:?}\n", app.approval_mode));
+    output.push_str(&format!("  Max subagents:  {}\n\n", app.max_subagents));
+
+    // Workspace
+    output.push_str("Workspace:\n");
+    output.push_str(&format!("  Path:           {}\n", app.workspace.display()));
+    output.push_str(&format!("  Skills dir:     {}\n", app.skills_dir.display()));
+    output.push_str(&format!(
+        "  Project doc:    {}\n\n",
+        if app.project_doc.is_some() {
+            "loaded"
+        } else {
+            "none"
+        }
+    ));
+
+    // Recent activity
+    if !app.recent_files.is_empty() {
+        output.push_str("Recent files:\n");
+        for (i, file) in app.recent_files.iter().take(5).enumerate() {
+            output.push_str(&format!("  {}. {}\n", i + 1, file.display()));
+        }
+        output.push('\n');
+    }
+
+    // RLM status (if in RLM mode)
+    if app.mode == AppMode::Rlm
+        && let Ok(session) = app.rlm_session.lock()
+    {
+        output.push_str("RLM Session:\n");
+        output.push_str(&format!("  Contexts:       {}\n", session.context_count()));
+        output.push_str(&format!(
+            "  Total lines:    {}\n\n",
+            session.total_line_count()
+        ));
+    }
+
+    // Queued messages
+    if !app.queued_messages.is_empty() {
+        output.push_str(&format!(
+            "Queued messages:  {}\n\n",
+            app.queued_messages.len()
+        ));
+    }
+
+    // System prompt preview
+    output.push_str("System prompt:\n");
+    let prompt_preview = match &app.system_prompt {
+        Some(SystemPrompt::Text(text)) => {
+            if text.len() > 200 {
+                format!("{}... ({} chars)", &text[..200], text.len())
+            } else {
+                text.clone()
+            }
+        }
+        Some(SystemPrompt::Blocks(blocks)) => {
+            format!("{} blocks", blocks.len())
+        }
+        None => "(none)".to_string(),
+    };
+    output.push_str(&format!("  {}\n", prompt_preview));
+
+    CommandResult::message(output)
 }

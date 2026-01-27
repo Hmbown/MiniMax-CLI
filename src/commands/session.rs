@@ -86,11 +86,11 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     app.model.clone_from(&session.metadata.model);
     app.workspace.clone_from(&session.metadata.workspace);
     app.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
-    app.total_conversation_tokens = app.total_tokens;
     app.current_session_id = Some(session.metadata.id.clone());
     if let Some(sp) = session.system_prompt {
         app.system_prompt = Some(crate::models::SystemPrompt::Text(sp));
     }
+    app.recalculate_context_tokens();
     app.scroll_to_bottom();
 
     CommandResult::with_message_and_action(
@@ -109,13 +109,22 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     )
 }
 
-/// Toggle auto-compaction
-pub fn compact(app: &mut App) -> CommandResult {
-    app.auto_compact = !app.auto_compact;
-    CommandResult::message(format!(
-        "Auto-compact: {}",
-        if app.auto_compact { "ON" } else { "OFF" }
-    ))
+/// Toggle auto-compaction or trigger manual compaction
+pub fn compact(app: &mut App, arg: Option<&str>) -> CommandResult {
+    match arg {
+        Some("now") => {
+            // Trigger manual compaction via engine
+            CommandResult::action(crate::tui::app::AppAction::CompactContext)
+        }
+        _ => {
+            // Toggle auto-compact setting
+            app.auto_compact = !app.auto_compact;
+            CommandResult::message(format!(
+                "Auto-compact: {}\n\nTip: Use '/compact now' to trigger manual compaction",
+                if app.auto_compact { "ON" } else { "OFF" }
+            ))
+        }
+    }
 }
 
 /// Export conversation to markdown

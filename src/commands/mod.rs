@@ -8,9 +8,11 @@ mod core;
 mod debug;
 mod init;
 mod queue;
+mod reload;
 pub mod rlm;
 mod session;
 mod skills;
+mod usage;
 
 use crate::tui::app::{App, AppAction, AppMode};
 
@@ -154,8 +156,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "compact",
         aliases: &[],
-        description: "Toggle auto-compaction",
-        usage: "/compact",
+        description: "Toggle auto-compaction or trigger manual compaction",
+        usage: "/compact [now]",
     },
     CommandInfo {
         name: "export",
@@ -257,6 +259,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Show session cost breakdown",
         usage: "/cost",
     },
+    CommandInfo {
+        name: "debug",
+        aliases: &[],
+        description: "Show debug information",
+        usage: "/debug",
+    },
+    CommandInfo {
+        name: "reload",
+        aliases: &[],
+        description: "Reload configuration from disk",
+        usage: "/reload",
+    },
+    CommandInfo {
+        name: "usage",
+        aliases: &[],
+        description: "Show API usage and quota information",
+        usage: "/usage",
+    },
 ];
 
 /// Execute a slash command
@@ -289,7 +309,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "save-session" | "save_session" => rlm::save_session(app, arg),
         "status" => rlm::status(app),
         "repl" => rlm::repl(app),
-        "compact" => session::compact(app),
+        "compact" => session::compact(app, arg),
         "export" => session::export(app, arg),
 
         // Config commands
@@ -299,14 +319,17 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "yolo" => config::yolo(app),
         "trust" => config::trust(app),
         "logout" => config::logout(app),
+        "reload" => reload::reload(app),
 
         // Debug commands
         "tokens" => debug::tokens(app),
         "cost" => debug::cost(app),
+        "debug" => debug::debug_info(app),
         "system" => debug::system_prompt(app),
         "context" => debug::context(app),
         "undo" => debug::undo(app),
         "retry" => debug::retry(app),
+        "usage" => usage::usage(app),
 
         // Project commands
         "init" => init::init(app),

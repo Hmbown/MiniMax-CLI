@@ -141,10 +141,10 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
                 app.workspace.clone_from(&saved.metadata.workspace);
                 app.current_session_id = Some(saved.metadata.id.clone());
                 app.total_tokens = u32::try_from(saved.metadata.total_tokens).unwrap_or(u32::MAX);
-                app.total_conversation_tokens = app.total_tokens;
                 if let Some(prompt) = saved.system_prompt {
                     app.system_prompt = Some(SystemPrompt::Text(prompt));
                 }
+                app.recalculate_context_tokens();
                 // Convert saved messages to HistoryCell format for display
                 app.history.clear();
                 app.history.push(HistoryCell::System {
@@ -364,8 +364,7 @@ async fn run_event_loop(
                         app.turn_started_at = None;
                         let turn_tokens = usage.input_tokens + usage.output_tokens;
                         app.total_tokens = app.total_tokens.saturating_add(turn_tokens);
-                        app.total_conversation_tokens =
-                            app.total_conversation_tokens.saturating_add(turn_tokens);
+                        app.recalculate_context_tokens();
                         app.last_prompt_tokens = Some(usage.input_tokens);
                         app.last_completion_tokens = Some(usage.output_tokens);
                         app.last_usage_at = Some(Instant::now());
@@ -418,6 +417,14 @@ async fn run_event_loop(
                             content: format!("Error: {message}"),
                         });
                         app.is_loading = false;
+                    }
+                    EngineEvent::SessionUpdated {
+                        messages,
+                        system_prompt,
+                    } => {
+                        app.api_messages = messages;
+                        app.system_prompt = system_prompt;
+                        app.recalculate_context_tokens();
                     }
                     EngineEvent::Status { message } => {
                         app.status_message = Some(message);
@@ -648,6 +655,10 @@ async fn run_event_loop(
                         return Ok(());
                     }
                 }
+                KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Toggle shell mode (Ctrl-X)
+                    app.toggle_shell_mode();
+                }
                 KeyCode::Esc => {
                     if app.is_loading {
                         engine_handle.cancel();
@@ -727,6 +738,12 @@ async fn run_event_loop(
                                     AppAction::ListSubAgents => {
                                         let _ = engine_handle.send(Op::ListSubAgents).await;
                                     }
+                                    AppAction::CompactContext => {
+                                        let _ = engine_handle.send(Op::CompactContext).await;
+                                        app.add_message(HistoryCell::System {
+                                            content: "Compacting context...".to_string(),
+                                        });
+                                    }
                                 }
                             }
                         } else {
@@ -753,20 +770,26 @@ async fn run_event_loop(
                                 continue;
                             }
 
-                            let queued = if let Some(mut draft) = app.queued_draft.take() {
-                                draft.display = input;
-                                draft
+                            // Check if shell mode is enabled
+                            if app.shell_mode {
+                                // Execute as shell command
+                                execute_shell_command(app, &input).await;
                             } else {
-                                build_queued_message(app, input)
-                            };
-                            if app.is_loading {
-                                app.queue_message(queued);
-                                app.status_message = Some(format!(
-                                    "Queued {} message(s) - /queue to view/edit",
-                                    app.queued_message_count()
-                                ));
-                            } else {
-                                dispatch_user_message(app, &engine_handle, queued).await?;
+                                let queued = if let Some(mut draft) = app.queued_draft.take() {
+                                    draft.display = input;
+                                    draft
+                                } else {
+                                    build_queued_message(app, input)
+                                };
+                                if app.is_loading {
+                                    app.queue_message(queued);
+                                    app.status_message = Some(format!(
+                                        "Queued {} message(s) - /queue to view/edit",
+                                        app.queued_message_count()
+                                    ));
+                                } else {
+                                    dispatch_user_message(app, &engine_handle, queued).await?;
+                                }
                             }
                         }
                     }
@@ -826,6 +849,10 @@ async fn run_event_loop(
                 }
                 KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.paste_from_clipboard();
+                }
+                KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl-J: Insert newline for multiline input
+                    app.insert_char('\n');
                 }
                 KeyCode::Char(c) => {
                     app.insert_char(c);
@@ -1022,6 +1049,101 @@ fn handle_rlm_input(app: &mut App, input: String) {
     };
 
     app.add_message(HistoryCell::System { content });
+}
+
+/// Execute a shell command in shell mode (Ctrl-X)
+async fn execute_shell_command(app: &mut App, command: &str) {
+    use crate::command_safety::{SafetyLevel, analyze_command};
+    use crate::tools::shell::ShellManager;
+
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    app.add_message(HistoryCell::User {
+        content: format!("$ {trimmed}"),
+    });
+
+    // Apply the same safety analysis we use for the shell tool.
+    let safety = analyze_command(trimmed);
+    match safety.level {
+        SafetyLevel::Dangerous => {
+            let reasons = safety.reasons.join("; ");
+            let suggestions = if safety.suggestions.is_empty() {
+                String::new()
+            } else {
+                format!("\nSuggestions: {}", safety.suggestions.join("; "))
+            };
+            app.add_message(HistoryCell::System {
+                content: format!("Blocked dangerous command.\nReasons: {reasons}{suggestions}"),
+            });
+            return;
+        }
+        SafetyLevel::RequiresApproval => {
+            let reasons = safety.reasons.join("; ");
+            app.add_message(HistoryCell::System {
+                content: format!(
+                    "Warning: command may be risky ({reasons}). Running anyway because shell mode is explicit."
+                ),
+            });
+        }
+        SafetyLevel::Safe | SafetyLevel::WorkspaceSafe => {}
+    }
+
+    app.status_message = Some(format!("Running shell command: {trimmed}"));
+
+    let command_owned = trimmed.to_string();
+    let workspace = app.workspace.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut manager = ShellManager::new(workspace);
+        manager.execute(&command_owned, None, 120_000, false)
+    })
+    .await;
+
+    app.status_message = None;
+
+    match result {
+        Ok(Ok(shell_result)) => {
+            let mut content = String::new();
+            if !shell_result.stdout.is_empty() {
+                content.push_str(&shell_result.stdout);
+            }
+            if !shell_result.stderr.is_empty() {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str("STDERR:\n");
+                content.push_str(&shell_result.stderr);
+            }
+            if content.trim().is_empty() {
+                content = "(no output)".to_string();
+            }
+
+            let exit_code = shell_result.exit_code.unwrap_or(-1);
+            content.push_str(&format!("\n(exit code: {exit_code})"));
+            if shell_result.sandboxed {
+                let sandbox = shell_result.sandbox_type.as_deref().unwrap_or("enabled");
+                content.push_str(&format!("\n(sandbox: {sandbox})"));
+            }
+            if shell_result.sandbox_denied {
+                content.push_str("\n(sandbox blocked this command)");
+            }
+
+            app.add_message(HistoryCell::System { content });
+        }
+        Ok(Err(err)) => {
+            app.add_message(HistoryCell::System {
+                content: format!("Shell error: {err}"),
+            });
+        }
+        Err(join_err) => {
+            app.add_message(HistoryCell::System {
+                content: format!("Shell task failed: {join_err}"),
+            });
+        }
+    }
 }
 
 struct AutoRlmDecision {
@@ -1519,7 +1641,8 @@ fn render(f: &mut Frame, app: &mut App) {
             app.total_conversation_tokens,
             app.is_loading,
             app.ui_theme.header_bg,
-        );
+        )
+        .with_shell_mode(app.shell_mode);
         let header_widget = HeaderWidget::new(header_data);
         let buf = f.buffer_mut();
         header_widget.render(chunks[0], buf);
