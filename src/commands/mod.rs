@@ -6,12 +6,17 @@
 mod config;
 mod core;
 mod debug;
+mod doctor;
 mod init;
+mod mcp;
+mod pins;
 mod queue;
 mod reload;
 pub mod rlm;
 mod session;
+mod setup;
 mod skills;
+mod snippets;
 mod usage;
 
 use crate::tui::app::{App, AppAction, AppMode};
@@ -93,6 +98,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         usage: "/clear",
     },
     CommandInfo {
+        name: "reset",
+        aliases: &[],
+        description: "Hard reset of session - clears history, todos, plan, and all state",
+        usage: "/reset",
+    },
+    CommandInfo {
         name: "exit",
         aliases: &["quit", "q"],
         description: "Exit the application",
@@ -101,7 +112,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "model",
         aliases: &[],
-        description: "Switch or view current model",
+        description: "Switch model (interactive picker or direct name)",
         usage: "/model [name]",
     },
     CommandInfo {
@@ -140,6 +151,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["save_session"],
         description: "Save RLM session to file",
         usage: "/save-session [path]",
+    },
+    CommandInfo {
+        name: "sessions",
+        aliases: &["resume"],
+        description: "List and switch between saved sessions",
+        usage: "/sessions",
+    },
+    CommandInfo {
+        name: "history",
+        aliases: &[],
+        description: "Browse and select from command history",
+        usage: "/history",
     },
     CommandInfo {
         name: "status",
@@ -181,7 +204,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "yolo",
         aliases: &[],
-        description: "Enable YOLO mode (shell + trust + auto-approve)",
+        description: "Toggle YOLO mode (shell + trust + auto-approve)",
         usage: "/yolo",
     },
     CommandInfo {
@@ -195,6 +218,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Clear API key and return to setup",
         usage: "/logout",
+    },
+    CommandInfo {
+        name: "setup",
+        aliases: &[],
+        description: "Run interactive setup wizard",
+        usage: "/setup",
     },
     // Debug commands
     CommandInfo {
@@ -277,6 +306,62 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Show API usage and quota information",
         usage: "/usage",
     },
+    CommandInfo {
+        name: "mcp",
+        aliases: &[],
+        description: "Show MCP server status",
+        usage: "/mcp",
+    },
+    CommandInfo {
+        name: "doctor",
+        aliases: &["diagnose", "health"],
+        description: "Run interactive diagnostics and health checks",
+        usage: "/doctor",
+    },
+    CommandInfo {
+        name: "tutorial",
+        aliases: &[],
+        description: "Restart the getting started tutorial",
+        usage: "/tutorial",
+    },
+    // Pin commands
+    CommandInfo {
+        name: "pin",
+        aliases: &[],
+        description: "Pin a message from history",
+        usage: "/pin [n]",
+    },
+    CommandInfo {
+        name: "pins",
+        aliases: &[],
+        description: "List all pinned messages",
+        usage: "/pins",
+    },
+    CommandInfo {
+        name: "unpin",
+        aliases: &[],
+        description: "Unpin a message or clear all",
+        usage: "/unpin <n>|all",
+    },
+    // Snippet commands
+    CommandInfo {
+        name: "snippet",
+        aliases: &[],
+        description: "Insert a snippet template into input",
+        usage: "/snippet <name>",
+    },
+    CommandInfo {
+        name: "snippets",
+        aliases: &[],
+        description: "List available snippets",
+        usage: "/snippets",
+    },
+    CommandInfo {
+        name: "search",
+        aliases: &["find"],
+        description: "Search through conversation history",
+        usage: "/search [query]",
+    },
 ];
 
 /// Execute a slash command
@@ -291,6 +376,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Core commands
         "help" | "?" => core::help(app, arg),
         "clear" => core::clear(app),
+        "reset" => session::reset(app),
         "exit" | "quit" | "q" => core::exit(),
         "model" => core::model(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
@@ -307,6 +393,8 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
             }
         }
         "save-session" | "save_session" => rlm::save_session(app, arg),
+        "sessions" | "resume" => CommandResult::action(AppAction::OpenSessionPicker),
+        "history" => CommandResult::action(AppAction::OpenHistoryPicker),
         "status" => rlm::status(app),
         "repl" => rlm::repl(app),
         "compact" => session::compact(app, arg),
@@ -320,6 +408,7 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "trust" => config::trust(app),
         "logout" => config::logout(app),
         "reload" => reload::reload(app),
+        "setup" => setup::setup(app),
 
         // Debug commands
         "tokens" => debug::tokens(app),
@@ -337,6 +426,34 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         // Skills commands
         "skills" => skills::list_skills(app),
         "skill" => skills::run_skill(app, arg),
+
+        // MCP command
+        "mcp" => mcp::mcp_status(app),
+
+        // Doctor command
+        "doctor" | "diagnose" | "health" => doctor::doctor(app),
+
+        // Tutorial command
+        "tutorial" => {
+            app.tutorial.start();
+            CommandResult::message("Starting tutorial...")
+        }
+
+        // Pin commands
+        "pin" => pins::pin(app, arg),
+        "pins" => pins::list_pins(app),
+        "unpin" => pins::unpin(app, arg),
+
+        // Snippet commands
+        "snippet" => snippets::insert_snippet(app, arg),
+        "snippets" => snippets::list_snippets(app),
+
+        // Search command
+        "search" | "find" => {
+            let query = arg.unwrap_or("");
+            app.search_query = query.to_string();
+            CommandResult::action(AppAction::OpenSearch(query.to_string()))
+        }
 
         _ => CommandResult::error(format!(
             "Unknown command: /{command}. Type /help for available commands."

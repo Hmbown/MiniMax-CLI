@@ -4,6 +4,7 @@
 
 use crate::models::{Message, SystemPrompt, Usage};
 use crate::project_context::{ProjectContext, load_project_context_with_parents};
+use crate::tui::app::PinnedMessage;
 use std::path::PathBuf;
 
 /// Session state for the engine.
@@ -41,6 +42,8 @@ pub struct Session {
 
     /// Project context loaded from AGENTS.md, etc.
     pub project_context: Option<ProjectContext>,
+    /// Pinned messages for quick reference
+    pub pinned_messages: Vec<PinnedMessage>,
 }
 
 /// Cumulative usage statistics for a session.
@@ -96,6 +99,7 @@ impl Session {
             } else {
                 None
             },
+            pinned_messages: Vec::new(),
         }
     }
 
@@ -119,5 +123,19 @@ impl Session {
     /// Get the message count
     pub fn message_count(&self) -> usize {
         self.messages.len()
+    }
+
+    /// Add a pinned message
+    pub fn add_pin(&mut self, pin: PinnedMessage) {
+        const MAX_PINS: usize = 5;
+        if self.pinned_messages.len() >= MAX_PINS {
+            self.pinned_messages.remove(0);
+        }
+        self.pinned_messages.push(pin);
+    }
+
+    /// Clear all pinned messages
+    pub fn clear_pins(&mut self) {
+        self.pinned_messages.clear();
     }
 }

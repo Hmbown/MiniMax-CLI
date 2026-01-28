@@ -136,6 +136,7 @@ pub struct ApprovalView {
     selected: usize,
     timeout: Option<Duration>,
     requested_at: Instant,
+    expanded: bool,
 }
 
 impl ApprovalView {
@@ -145,6 +146,25 @@ impl ApprovalView {
             selected: 0,
             timeout: None,
             requested_at: Instant::now(),
+            expanded: false,
+        }
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.expanded
+    }
+
+    fn toggle_expanded(&mut self) {
+        self.expanded = !self.expanded;
+    }
+
+    /// Format parameters for display, respecting expanded state
+    pub fn params_display_expanded(&self) -> String {
+        if self.expanded {
+            serde_json::to_string(&self.request.params)
+                .unwrap_or_else(|_| self.request.params.to_string())
+        } else {
+            self.request.params_display()
         }
     }
 
@@ -187,6 +207,14 @@ impl ModalView for ApprovalView {
         ModalKind::Approval
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
@@ -202,12 +230,19 @@ impl ModalView for ApprovalView {
             KeyCode::Char('a') => self.emit_decision(ReviewDecision::ApprovedForSession, false),
             KeyCode::Char('n') => self.emit_decision(ReviewDecision::Denied, false),
             KeyCode::Esc => self.emit_decision(ReviewDecision::Abort, false),
+            KeyCode::Char('e') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                self.toggle_expanded();
+                ViewAction::None
+            }
             _ => ViewAction::None,
         }
     }
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
-        let approval_widget = ApprovalWidget::new(&self.request, self.selected);
+        let params_display = self.params_display_expanded();
+        let approval_widget =
+            crate::tui::widgets::ApprovalWidget::with_expanded(&self.request, self.selected, &params_display);
         approval_widget.render(area, buf);
     }
 
@@ -216,6 +251,14 @@ impl ModalView for ApprovalView {
             return self.emit_decision(ReviewDecision::Denied, true);
         }
         ViewAction::None
+    }
+
+    fn has_expandable_content(&self) -> bool {
+        true
+    }
+
+    fn is_expanded(&self) -> bool {
+        self.expanded
     }
 }
 

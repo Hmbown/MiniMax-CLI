@@ -4,11 +4,18 @@ use std::fmt;
 
 use crate::palette;
 use crate::tui::approval::ReviewDecision;
+use crate::tui::history_picker::HistoryPickerResult;
+use crate::tui::model_picker::ModelPickerResult;
+use crate::tui::session_picker::SessionPickerResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
     Approval,
     Help,
+    SessionPicker,
+    ModelPicker,
+    HistoryPicker,
+    Search,
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +25,18 @@ pub enum ViewEvent {
         tool_name: String,
         decision: ReviewDecision,
         timed_out: bool,
+    },
+    SessionPickerResult {
+        result: SessionPickerResult,
+    },
+    ModelPickerResult {
+        result: ModelPickerResult,
+    },
+    HistoryPickerResult {
+        result: HistoryPickerResult,
+    },
+    SearchResultSelected {
+        result: SearchResult,
     },
 }
 
@@ -35,6 +54,18 @@ pub trait ModalView {
     fn tick(&mut self) -> ViewAction {
         ViewAction::None
     }
+    /// Returns true if this view has content that can be expanded/collapsed
+    fn has_expandable_content(&self) -> bool {
+        false
+    }
+    /// Returns true if the view's content is currently expanded
+    fn is_expanded(&self) -> bool {
+        false
+    }
+    /// Returns self as Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// Returns self as Any for mutable downcasting
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 #[derive(Default)]
@@ -53,6 +84,24 @@ impl ViewStack {
 
     pub fn top_kind(&self) -> Option<ModalKind> {
         self.views.last().map(|view| view.kind())
+    }
+
+    /// Get reference to top view as Any for downcasting
+    pub fn top_as_any(&self) -> Option<&dyn std::any::Any> {
+        self.views.last().map(|view| view.as_any())
+    }
+
+    /// Get mutable reference to top view as Any for downcasting
+    pub fn top_as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        self.views.last_mut().map(|view| view.as_any_mut())
+    }
+
+    /// Check if the top view has expandable content that is currently collapsed
+    pub fn top_has_collapsed_content(&self) -> bool {
+        self.views
+            .last()
+            .map(|view| view.has_expandable_content() && !view.is_expanded())
+            .unwrap_or(false)
     }
 
     pub fn push<V: ModalView + 'static>(&mut self, view: V) {
@@ -125,6 +174,14 @@ impl HelpView {
 impl ModalView for HelpView {
     fn kind(&self) -> ModalKind {
         ModalKind::Help
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
@@ -213,7 +270,13 @@ impl ModalView for HelpView {
         help_lines.push(Line::from(
             "  Ctrl+J       - Insert newline (multiline input)",
         ));
+        help_lines.push(Line::from("  Alt+Enter    - Insert newline (multiline input)"));
+        help_lines.push(Line::from("  Ctrl+D       - Exit when input is empty"));
+        help_lines.push(Line::from("  Ctrl+W       - Delete word backward"));
+        help_lines.push(Line::from("  Ctrl+K       - Delete to end of line"));
         help_lines.push(Line::from("  Ctrl+V       - Paste from clipboard"));
+        help_lines.push(Line::from("  Ctrl+/       - Show this help"));
+        help_lines.push(Line::from("  F1           - Show this help"));
         help_lines.push(Line::from("  Up/Down      - Scroll this help"));
         help_lines.push(Line::from(""));
 
@@ -250,3 +313,6 @@ impl ModalView for HelpView {
         help.render(popup_area, buf);
     }
 }
+
+// Re-export search view types
+pub use crate::tui::search_view::{SearchView, SearchResult, render_search_results};

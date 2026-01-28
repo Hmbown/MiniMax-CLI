@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::models::context_window_for_model;
 use crate::palette;
-use crate::tui::app::AppMode;
+use crate::tui::app::{AppMode, PinnedMessage};
 
 use super::Renderable;
 
@@ -24,6 +24,7 @@ pub struct HeaderData<'a> {
     pub is_streaming: bool,
     pub background: ratatui::style::Color,
     pub shell_mode: bool,
+    pub pins: Vec<&'a PinnedMessage>,
 }
 
 impl<'a> HeaderData<'a> {
@@ -45,6 +46,7 @@ impl<'a> HeaderData<'a> {
             is_streaming,
             background,
             shell_mode: false,
+            pins: Vec::new(),
         }
     }
 
@@ -52,6 +54,13 @@ impl<'a> HeaderData<'a> {
     #[must_use]
     pub fn with_shell_mode(mut self, shell_mode: bool) -> Self {
         self.shell_mode = shell_mode;
+        self
+    }
+
+    /// Set pinned messages.
+    #[must_use]
+    pub fn with_pins(mut self, pins: Vec<&'a PinnedMessage>) -> Self {
+        self.pins = pins;
         self
     }
 
@@ -74,9 +83,10 @@ impl<'a> HeaderData<'a> {
     }
 }
 
-/// Header bar widget (1 line height).
+/// Header bar widget (1-2 lines height).
 ///
 /// Layout: `[MODE] | model-name | Context: XX% | [streaming indicator]`
+/// If pins exist, a second line shows: `📌 [source] preview`
 pub struct HeaderWidget<'a> {
     data: HeaderData<'a>,
 }
@@ -163,6 +173,48 @@ impl<'a> HeaderWidget<'a> {
                 .add_modifier(Modifier::BOLD),
         ))
     }
+    /// Build a pin display span for the pins line.
+    fn pin_spans(&self) -> Vec<Span<'static>> {
+        if self.data.pins.is_empty() {
+            return Vec::new();
+        }
+
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            "📌 ",
+            Style::default().fg(palette::MINIMAX_YELLOW),
+        ));
+
+        for (idx, pin) in self.data.pins.iter().enumerate() {
+            let source_color = match pin.source {
+                crate::tui::app::PinSource::User => palette::MINIMAX_ORANGE,
+                crate::tui::app::PinSource::Assistant => palette::MINIMAX_BLUE,
+            };
+            let source_label = match pin.source {
+                crate::tui::app::PinSource::User => "You",
+                crate::tui::app::PinSource::Assistant => "MiniMax",
+            };
+            let preview = pin.preview();
+
+            spans.push(Span::styled(
+                format!("[{}]", source_label),
+                Style::default().fg(source_color),
+            ));
+            spans.push(Span::styled(
+                format!(" {}", preview),
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+
+            if idx < self.data.pins.len() - 1 {
+                spans.push(Span::styled(
+                    " | ",
+                    Style::default().fg(palette::TEXT_MUTED),
+                ));
+            }
+        }
+
+        spans
+    }
 }
 
 impl Renderable for HeaderWidget<'_> {
@@ -171,6 +223,18 @@ impl Renderable for HeaderWidget<'_> {
             return;
         }
 
+        let has_pins = !self.data.pins.is_empty();
+        let header_height = if has_pins { 2 } else { 1 };
+
+        if area.height < header_height {
+            // Not enough space, render minimal header
+            let line = Line::from(vec![self.mode_badge()]);
+            let paragraph = Paragraph::new(line).style(Style::default().bg(self.data.background));
+            paragraph.render(area, buf);
+            return;
+        }
+
+        // Render main header line
         let mut left_spans = vec![
             self.mode_badge(),
             Span::styled(" | ", Style::default().fg(palette::TEXT_MUTED)),
@@ -220,11 +284,38 @@ impl Renderable for HeaderWidget<'_> {
 
         let line = Line::from(spans);
         let paragraph = Paragraph::new(line).style(Style::default().bg(self.data.background));
-        paragraph.render(area, buf);
+
+        let header_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        paragraph.render(header_area, buf);
+
+        // Render pins line if there are pins and enough space
+        if has_pins && area.height >= 2 {
+            let pin_spans = self.pin_spans();
+            let pin_line = Line::from(pin_spans);
+            let pin_paragraph =
+                Paragraph::new(pin_line).style(Style::default().bg(self.data.background));
+
+            let pin_area = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: 1,
+            };
+            pin_paragraph.render(pin_area, buf);
+        }
     }
 
     fn desired_height(&self, _width: u16) -> u16 {
-        1
+        if self.data.pins.is_empty() {
+            1
+        } else {
+            2
+        }
     }
 }
 
@@ -242,6 +333,7 @@ mod tests {
             is_streaming: false,
             background: palette::MINIMAX_INK,
             shell_mode: false,
+            pins: Vec::new(),
         };
         assert_eq!(data.context_percent(), 50);
         assert_eq!(data.context_remaining_percent(), 50);
@@ -257,6 +349,7 @@ mod tests {
             is_streaming: false,
             background: palette::MINIMAX_INK,
             shell_mode: false,
+            pins: Vec::new(),
         };
         assert_eq!(data.context_percent(), 0);
         assert_eq!(data.context_remaining_percent(), 100);
@@ -272,6 +365,7 @@ mod tests {
             is_streaming: false,
             background: palette::MINIMAX_INK,
             shell_mode: false,
+            pins: Vec::new(),
         };
         assert_eq!(data.context_percent(), 0);
         assert_eq!(data.context_remaining_percent(), 100);

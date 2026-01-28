@@ -2,9 +2,10 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use ratatui::layout::Rect;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -19,12 +20,16 @@ use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
 use crate::tui::approval::ApprovalMode;
 use crate::tui::clipboard::{ClipboardContent, ClipboardHandler};
+use crate::tui::fuzzy_picker::FuzzyPicker;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptScroll};
 use crate::tui::selection::TranscriptSelection;
 use crate::tui::transcript::TranscriptViewCache;
+use crate::tui::search_view::SearchResult;
 use crate::tui::views::ViewStack;
+use crate::tui::suggestions::SuggestionEngine;
+use crate::tui::tutorial::Tutorial;
 use std::sync::{Arc, Mutex};
 
 // === Types ===
@@ -49,7 +54,7 @@ pub enum AppMode {
     Duo,
 }
 
-fn char_count(text: &str) -> usize {
+pub fn char_count(text: &str) -> usize {
     text.chars().count()
 }
 
@@ -72,6 +77,15 @@ fn remove_char_at(text: &mut String, char_index: usize) -> bool {
     let end = start + ch.len_utf8();
     text.replace_range(start..end, "");
     true
+}
+
+/// Check if a character is a word boundary character (punctuation)
+fn is_word_boundary_char(c: char) -> bool {
+    matches!(c,
+        '!' | '"' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '-' | '.' |
+        '/' | ':' | ';' | '<' | '=' | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '_' | '`' |
+        '{' | '|' | '}' | '~'
+    )
 }
 
 fn normalize_paste_text(text: &str) -> String {
@@ -261,6 +275,22 @@ pub struct App {
     /// Maximum recent files to track
     #[allow(dead_code)]
     pub max_recent_files: usize,
+    /// Fuzzy file picker for @-path completion
+    pub fuzzy_picker: FuzzyPicker,
+    /// Slash command completer
+    pub command_completer: Option<crate::tui::command_completer::CommandCompleter>,
+    /// Interactive tutorial state
+    pub tutorial: Tutorial,
+    /// Smart suggestion engine for contextual hints
+    pub suggestion_engine: SuggestionEngine,
+    /// Pinned messages for quick reference (max 5)
+    pub pinned_messages: Vec<PinnedMessage>,
+    /// Cached search results
+    pub search_results: Vec<SearchResult>,
+    /// Current search result index
+    pub current_search_idx: Option<usize>,
+    /// Last search query (persisted during session)
+    pub search_query: String,
 }
 
 /// Message queued while the engine is busy.
@@ -268,6 +298,42 @@ pub struct App {
 pub struct QueuedMessage {
     pub display: String,
     pub skill_instruction: Option<String>,
+}
+
+/// Source of a pinned message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PinSource {
+    User,
+    Assistant,
+}
+
+/// A pinned message for quick reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedMessage {
+    pub content: String,
+    pub timestamp: SystemTime,
+    pub source: PinSource,
+}
+
+impl PinnedMessage {
+    pub fn new(content: String, source: PinSource) -> Self {
+        Self {
+            content,
+            timestamp: SystemTime::now(),
+            source,
+        }
+    }
+
+    /// Get a truncated preview (max 50 chars) with ellipsis if needed.
+    pub fn preview(&self) -> String {
+        let max_len = 50;
+        if self.content.chars().count() <= max_len {
+            self.content.clone()
+        } else {
+            let truncated: String = self.content.chars().take(max_len.saturating_sub(3)).collect();
+            format!("{}...", truncated)
+        }
+    }
 }
 
 impl QueuedMessage {
@@ -391,6 +457,9 @@ impl App {
             global_skills_dir
         };
 
+        // Load input history from disk
+        let input_history = Self::load_input_history_static(&settings);
+
         Self {
             mode: initial_mode,
             input: String::new(),
@@ -413,10 +482,10 @@ impl App {
             is_loading: false,
             status_message: None,
             model,
-            workspace,
+            workspace: workspace.clone(),
             skills_dir,
             system_prompt: None,
-            input_history: Vec::new(),
+            input_history,
             history_index: None,
             auto_compact,
             show_thinking,
@@ -476,6 +545,14 @@ impl App {
             current_process: None,
             recent_files: Vec::new(),
             max_recent_files: 10,
+            fuzzy_picker: FuzzyPicker::new(&workspace),
+            command_completer: None,
+            tutorial: Tutorial::new(settings.show_tutorial),
+            suggestion_engine: SuggestionEngine::new(),
+            pinned_messages: Vec::new(),
+            search_results: Vec::new(),
+            current_search_idx: None,
+            search_query: String::new(),
         }
     }
 
@@ -735,6 +812,53 @@ impl App {
         }
     }
 
+    /// Delete from cursor to the previous word boundary (Ctrl+W)
+    pub fn delete_word_backward(&mut self) {
+        if self.cursor_position == 0 {
+            return;
+        }
+        let cursor = self.cursor_position;
+        let byte_index = byte_index_at_char(&self.input, cursor);
+
+        // Find the start of the previous word
+        let mut target_pos = cursor;
+        let chars: Vec<char> = self.input.chars().collect();
+
+        // Skip whitespace before cursor
+        while target_pos > 0 && chars[target_pos - 1].is_whitespace() {
+            target_pos -= 1;
+        }
+
+        // Skip word characters
+        while target_pos > 0 {
+            let ch = chars[target_pos - 1];
+            if ch.is_whitespace() || is_word_boundary_char(ch) {
+                break;
+            }
+            target_pos -= 1;
+        }
+
+        // Skip any trailing word boundary characters (punctuation)
+        while target_pos > 0 {
+            let ch = chars[target_pos - 1];
+            if !is_word_boundary_char(ch) || ch.is_whitespace() {
+                break;
+            }
+            target_pos -= 1;
+        }
+
+        let target_byte = byte_index_at_char(&self.input, target_pos);
+        self.input.replace_range(target_byte..byte_index, "");
+        self.cursor_position = target_pos;
+    }
+
+    /// Delete from cursor to end of line (Ctrl+K)
+    pub fn delete_to_end(&mut self) {
+        let cursor = self.cursor_position;
+        let byte_index = byte_index_at_char(&self.input, cursor);
+        self.input.truncate(byte_index);
+    }
+
     pub fn move_cursor_left(&mut self) {
         self.cursor_position = self.cursor_position.saturating_sub(1);
     }
@@ -766,17 +890,85 @@ impl App {
         }
         let input = self.input.clone();
         if !input.starts_with('/') {
-            self.input_history.push(input.clone());
-            if self.max_input_history == 0 {
-                self.input_history.clear();
-            } else if self.input_history.len() > self.max_input_history {
-                let excess = self.input_history.len() - self.max_input_history;
-                self.input_history.drain(0..excess);
+            // Filter out duplicates - don't add if same as most recent entry
+            if self.input_history.last() != Some(&input) {
+                self.input_history.push(input.clone());
+                if self.max_input_history == 0 {
+                    self.input_history.clear();
+                } else if self.input_history.len() > self.max_input_history {
+                    let excess = self.input_history.len() - self.max_input_history;
+                    self.input_history.drain(0..excess);
+                }
+                // Save history to disk
+                self.save_input_history();
             }
         }
         self.history_index = None;
         self.clear_input();
         Some(input)
+    }
+
+    /// Load input history from disk (static version for use in new())
+    fn load_input_history_static(settings: &Settings) -> Vec<String> {
+        let path = &settings.input_history_path;
+        if !path.exists() {
+            return Vec::new();
+        }
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let lines: Vec<String> = content
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| line.to_string())
+                    .collect();
+                // Filter out slash commands and apply max limit
+                let mut filtered: Vec<String> = lines
+                    .into_iter()
+                    .filter(|line| !line.starts_with('/'))
+                    .collect();
+                if filtered.len() > settings.input_history_max {
+                    let excess = filtered.len() - settings.input_history_max;
+                    filtered.drain(0..excess);
+                }
+                filtered
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load input history from {}: {}", path.display(), e);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Save input history to disk
+    fn save_input_history(&self) {
+        // Reload settings to get current path
+        let settings = Settings::load().unwrap_or_default();
+        let path = &settings.input_history_path;
+        
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("Warning: Failed to create directory for input history: {}", e);
+                return;
+            }
+        }
+        
+        // Build content from history, respecting the max limit
+        let limit = settings.input_history_max;
+        let content = if self.input_history.len() > limit {
+            self.input_history
+                .iter()
+                .skip(self.input_history.len() - limit)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            self.input_history.join("\n")
+        };
+        
+        if let Err(e) = std::fs::write(path, content) {
+            eprintln!("Warning: Failed to save input history to {}: {}", path.display(), e);
+        }
     }
 
     pub fn queue_message(&mut self, message: QueuedMessage) {
@@ -912,6 +1104,62 @@ impl App {
             String::new()
         }
     }
+
+    // === Pinned Messages ===
+
+    const MAX_PINS: usize = 5;
+
+    /// Pin a message from history by cell index.
+    /// Returns true if a message was pinned, false if invalid index or not pinnable.
+    pub fn pin_message(&mut self, cell_idx: usize) -> bool {
+        let Some(cell) = self.history.get(cell_idx) else {
+            return false;
+        };
+
+        let (content, source) = match cell {
+            super::history::HistoryCell::User { content } => {
+                (content.clone(), PinSource::User)
+            }
+            super::history::HistoryCell::Assistant { content, .. } => {
+                (content.clone(), PinSource::Assistant)
+            }
+            _ => return false, // System, Tool, Error, ThinkingSummary can't be pinned
+        };
+
+        // Remove oldest pin if at capacity
+        if self.pinned_messages.len() >= Self::MAX_PINS {
+            self.pinned_messages.remove(0);
+        }
+
+        self.pinned_messages.push(PinnedMessage::new(content, source));
+        true
+    }
+
+    /// Unpin a message by index (0 = oldest).
+    /// Returns true if a pin was removed.
+    pub fn unpin_message(&mut self, idx: usize) -> bool {
+        if idx < self.pinned_messages.len() {
+            self.pinned_messages.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// List all pinned messages as references.
+    pub fn list_pins(&self) -> Vec<&PinnedMessage> {
+        self.pinned_messages.iter().collect()
+    }
+
+    /// Clear all pinned messages.
+    pub fn clear_pins(&mut self) {
+        self.pinned_messages.clear();
+    }
+
+    /// Get the number of pinned messages.
+    pub fn pin_count(&self) -> usize {
+        self.pinned_messages.len()
+    }
 }
 
 // === Actions ===
@@ -934,6 +1182,22 @@ pub enum AppAction {
     ListSubAgents,
     /// Trigger manual context compaction
     CompactContext,
+    /// Open the session picker modal
+    OpenSessionPicker,
+    /// Open the model picker modal
+    OpenModelPicker,
+    /// Open the command history picker modal
+    OpenHistoryPicker,
+    /// Switch to a different session
+    SwitchSession { session_id: String },
+    /// Resume a session from the session picker
+    ResumeSession(String),
+    /// Reload configuration from disk
+    ReloadConfig,
+    /// Set the input text (for snippet insertion)
+    SetInput(String),
+    /// Open the search modal with optional query
+    OpenSearch(String),
 }
 
 #[cfg(test)]

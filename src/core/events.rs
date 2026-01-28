@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 
+use crate::error_hints::ErrorHint;
 use crate::models::{Message, SystemPrompt, Usage};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::SubAgentResult;
@@ -71,7 +72,11 @@ pub enum Event {
 
     // === System Events ===
     /// An error occurred
-    Error { message: String, recoverable: bool },
+    Error {
+        message: String,
+        recoverable: bool,
+        hint: Option<ErrorHint>,
+    },
 
     /// Status message for UI display
     Status { message: String },
@@ -99,9 +104,25 @@ pub enum Event {
 impl Event {
     /// Create a new error event
     pub fn error(message: impl Into<String>, recoverable: bool) -> Self {
+        let message = message.into();
+        let hint = crate::error_hints::get_error_hint(&message);
+        Event::Error {
+            message,
+            recoverable,
+            hint,
+        }
+    }
+
+    /// Create a new error event with a pre-computed hint
+    pub fn error_with_hint(
+        message: impl Into<String>,
+        recoverable: bool,
+        hint: Option<ErrorHint>,
+    ) -> Self {
         Event::Error {
             message: message.into(),
             recoverable,
+            hint,
         }
     }
 

@@ -165,10 +165,24 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
     }
 }
 
-/// Enable YOLO mode (shell + trust + auto-approve)
+/// Toggle YOLO mode (shell + trust + auto-approve)
 pub fn yolo(app: &mut App) -> CommandResult {
-    app.set_mode(AppMode::Yolo);
-    CommandResult::message("YOLO mode enabled - shell + trust + auto-approve!")
+    if app.mode == AppMode::Yolo {
+        // Toggle OFF: Return to Normal mode
+        app.set_mode(AppMode::Normal);
+        CommandResult::message(
+            "YOLO mode disabled - returned to Normal mode with suggested approvals".to_string(),
+        )
+    } else {
+        // Toggle ON: Enable YOLO mode
+        app.set_mode(AppMode::Yolo);
+        CommandResult::message(format!(
+            "⚠️  YOLO mode enabled - shell + trust + auto-approve!\n\n\
+             WARNING: YOLO mode automatically executes tools without confirmation.\n\
+             This includes file operations, shell commands, and code execution.\n\
+             Use with caution!"
+        ))
+    }
 }
 
 /// Enable trust mode (file access outside workspace)
@@ -217,13 +231,32 @@ mod tests {
     }
 
     #[test]
-    fn test_yolo_command_sets_all_flags() {
+    fn test_yolo_command_toggles_on() {
         let mut app = create_test_app();
+        // Initially in Normal mode
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(!app.yolo);
+        // Toggle ON
         let _ = yolo(&mut app);
         assert!(app.allow_shell);
         assert!(app.trust_mode);
         assert!(app.yolo);
         assert_eq!(app.approval_mode, ApprovalMode::Auto);
         assert_eq!(app.mode, AppMode::Yolo);
+    }
+
+    #[test]
+    fn test_yolo_command_toggles_off() {
+        let mut app = create_test_app();
+        // Start in YOLO mode
+        app.set_mode(AppMode::Yolo);
+        assert!(app.yolo);
+        assert_eq!(app.mode, AppMode::Yolo);
+        // Toggle OFF
+        let _ = yolo(&mut app);
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(!app.yolo);
+        assert!(!app.trust_mode);
+        assert_eq!(app.approval_mode, ApprovalMode::Suggest);
     }
 }

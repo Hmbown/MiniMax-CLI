@@ -52,14 +52,48 @@ pub fn exit() -> CommandResult {
     CommandResult::action(AppAction::Quit)
 }
 
+use crate::settings::Settings;
+use crate::tui::model_picker::validate_model;
+
 /// Switch or view current model
+/// 
+/// When called without arguments, opens an interactive model picker.
+/// When called with an argument, validates and sets the model directly.
 pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
     if let Some(name) = model_name {
-        let old_model = app.model.clone();
-        app.model = name.to_string();
-        CommandResult::message(format!("Model changed: {old_model} → {name}"))
+        // Validate the model name
+        if let Some(model_info) = validate_model(name) {
+            let old_model = app.model.clone();
+            let new_model = model_info.id.to_string();
+            app.model = new_model.clone();
+            
+            // Persist to settings
+            let mut settings = Settings::load().unwrap_or_default();
+            settings.default_model = Some(new_model.clone());
+            if let Err(e) = settings.save() {
+                return CommandResult::message(format!(
+                    "Model changed: {old_model} → {new_model} (failed to save: {e})"
+                ));
+            }
+            
+            CommandResult::message(format!(
+                "Model changed: {old_model} → {new_model} (saved)\n\n{}",
+                model_info.description
+            ))
+        } else {
+            // Invalid model - show available models
+            let available = crate::tui::model_picker::AVAILABLE_MODELS
+                .iter()
+                .map(|m| format!("  • {} - {}", m.id, m.name))
+                .collect::<Vec<_>>()
+                .join("\n");
+            CommandResult::error(format!(
+                "Unknown model: '{name}'\n\nAvailable models:\n{available}"
+            ))
+        }
     } else {
-        CommandResult::message(format!("Current model: {}", app.model))
+        // No argument - open the interactive picker
+        CommandResult::action(crate::tui::app::AppAction::OpenModelPicker)
     }
 }
 

@@ -25,8 +25,14 @@ pub struct Settings {
     pub sidebar_width_percent: u16,
     /// Maximum number of input history entries to save
     pub max_input_history: usize,
+    /// Path to input history file
+    pub input_history_path: PathBuf,
+    /// Maximum number of input history entries to persist to disk
+    pub input_history_max: usize,
     /// Default model to use
     pub default_model: Option<String>,
+    /// Show tutorial on first startup
+    pub show_tutorial: bool,
 }
 
 impl Default for Settings {
@@ -39,7 +45,10 @@ impl Default for Settings {
             default_mode: "normal".to_string(),
             sidebar_width_percent: 28,
             max_input_history: 100,
+            input_history_path: default_input_history_path(),
+            input_history_max: 1000,
             default_model: None,
+            show_tutorial: true,
         }
     }
 }
@@ -136,8 +145,22 @@ impl Settings {
                 })?;
                 self.max_input_history = max;
             }
+            "input_history_max" => {
+                let max: usize = value.parse().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Failed to update setting: invalid input history max '{value}'. Expected a positive number."
+                    )
+                })?;
+                self.input_history_max = max;
+            }
+            "input_history_path" => {
+                self.input_history_path = PathBuf::from(value);
+            }
             "default_model" | "model" => {
                 self.default_model = Some(value.to_string());
+            }
+            "show_tutorial" | "tutorial" => {
+                self.show_tutorial = parse_bool(value)?;
             }
             _ => {
                 anyhow::bail!("Failed to update setting: unknown setting '{key}'.");
@@ -162,9 +185,15 @@ impl Settings {
         ));
         lines.push(format!("  max_history:        {}", self.max_input_history));
         lines.push(format!(
+            "  input_history_path: {}",
+            self.input_history_path.display()
+        ));
+        lines.push(format!("  input_history_max:  {}", self.input_history_max));
+        lines.push(format!(
             "  default_model:      {}",
             self.default_model.as_deref().unwrap_or("(default)")
         ));
+        lines.push(format!("  show_tutorial:      {}", self.show_tutorial));
         lines.push(String::new());
         lines.push(format!(
             "Config file: {}",
@@ -186,9 +215,19 @@ impl Settings {
             ),
             ("sidebar_width", "Sidebar width percentage: 10-50"),
             ("max_history", "Max input history entries"),
+            ("input_history_path", "Path to input history file"),
+            ("input_history_max", "Max input history entries to persist"),
             ("default_model", "Default model name"),
+            ("show_tutorial", "Show tutorial on startup: on/off"),
         ]
     }
+}
+
+/// Get the default input history path
+fn default_input_history_path() -> PathBuf {
+    dirs::config_dir()
+        .map(|p| p.join("minimax").join("input_history.txt"))
+        .unwrap_or_else(|| PathBuf::from("input_history.txt"))
 }
 
 /// Parse a boolean value from various formats

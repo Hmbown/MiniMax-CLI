@@ -9,6 +9,7 @@
 #![allow(dead_code)] // Public API - session persistence functions for future TUI integration
 
 use crate::models::{ContentBlock, Message, SystemPrompt};
+use crate::tui::app::PinnedMessage;
 use crate::utils::truncate_to_boundary;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,8 @@ pub struct SavedSession {
     pub messages: Vec<Message>,
     /// System prompt if any
     pub system_prompt: Option<String>,
+    /// Pinned messages for quick reference
+    pub pinned_messages: Vec<PinnedMessage>,
 }
 
 /// Manager for session persistence operations
@@ -207,6 +210,7 @@ pub fn create_saved_session(
     workspace: &Path,
     total_tokens: u64,
     system_prompt: Option<&SystemPrompt>,
+    pinned_messages: Vec<PinnedMessage>,
 ) -> SavedSession {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now();
@@ -236,6 +240,7 @@ pub fn create_saved_session(
         },
         messages: messages.to_vec(),
         system_prompt: system_prompt_to_string(system_prompt),
+        pinned_messages,
     }
 }
 
@@ -245,12 +250,14 @@ pub fn update_session(
     messages: &[Message],
     total_tokens: u64,
     system_prompt: Option<&SystemPrompt>,
+    pinned_messages: Vec<PinnedMessage>,
 ) -> SavedSession {
     session.messages = messages.to_vec();
     session.metadata.updated_at = Utc::now();
     session.metadata.message_count = messages.len();
     session.metadata.total_tokens = total_tokens;
     session.system_prompt = system_prompt_to_string(system_prompt).or(session.system_prompt);
+    session.pinned_messages = pinned_messages;
     session
 }
 
@@ -349,7 +356,7 @@ mod tests {
             make_test_message("assistant", "Hi there!"),
         ];
 
-        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
         let session_id = session.metadata.id.clone();
 
         manager.save_session(&session).expect("save");
@@ -367,7 +374,7 @@ mod tests {
         // Create a few sessions
         for i in 0..3 {
             let messages = vec![make_test_message("user", &format!("Session {i}"))];
-            let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+            let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
             manager.save_session(&session).expect("save");
         }
 
@@ -381,7 +388,7 @@ mod tests {
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
 
         let messages = vec![make_test_message("user", "Test session")];
-        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
         let prefix = session.metadata.id[..8].to_string();
         manager.save_session(&session).expect("save");
 
@@ -395,7 +402,7 @@ mod tests {
         let manager = SessionManager::new(tmp.path().join("sessions")).expect("new");
 
         let messages = vec![make_test_message("user", "To be deleted")];
-        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None);
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
         let session_id = session.metadata.id.clone();
 
         manager.save_session(&session).expect("save");
@@ -432,14 +439,14 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
 
         let messages = vec![make_test_message("user", "Hello")];
-        let session = create_saved_session(&messages, "test-model", tmp.path(), 50, None);
+        let session = create_saved_session(&messages, "test-model", tmp.path(), 50, None, vec![]);
 
         let new_messages = vec![
             make_test_message("user", "Hello"),
             make_test_message("assistant", "Hi!"),
         ];
 
-        let updated = update_session(session, &new_messages, 100, None);
+        let updated = update_session(session, &new_messages, 100, None, vec![]);
         assert_eq!(updated.messages.len(), 2);
         assert_eq!(updated.metadata.total_tokens, 100);
     }

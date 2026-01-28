@@ -115,6 +115,51 @@ impl SkillRegistry {
     }
 }
 
+// === Inline Skill Parsing ===
+
+/// Result of parsing inline skill syntax
+#[derive(Debug, Clone)]
+pub struct ParsedInlineSkill {
+    pub skill_name: String,
+    pub message: String,
+}
+
+/// Parse inline skill syntax: `/skill:name message`
+/// Returns `Some(ParsedInlineSkill)` if input starts with `/skill:`
+/// Returns `None` if no inline skill syntax is detected
+pub fn parse_inline_skill(input: &str) -> Option<ParsedInlineSkill> {
+    let trimmed = input.trim_start();
+    
+    // Check if input starts with /skill:
+    let prefix = "/skill:";
+    if !trimmed.starts_with(prefix) {
+        return None;
+    }
+    
+    let after_prefix = &trimmed[prefix.len()..];
+    
+    // Find the end of the skill name (first whitespace or end of string)
+    let (skill_name, message) = match after_prefix.split_once(|c: char| c.is_whitespace()) {
+        Some((name, msg)) => (name.trim(), msg.trim()),
+        None => (after_prefix.trim(), ""),
+    };
+    
+    if skill_name.is_empty() {
+        return None;
+    }
+    
+    Some(ParsedInlineSkill {
+        skill_name: skill_name.to_string(),
+        message: message.to_string(),
+    })
+}
+
+/// Check if input looks like inline skill syntax (for completion hints)
+pub fn is_inline_skill_prefix(input: &str) -> bool {
+    let trimmed = input.trim_start();
+    trimmed.starts_with("/skill:") || trimmed == "/skill" || trimmed.starts_with("/skill ")
+}
+
 // === CLI Helpers ===
 
 #[allow(dead_code)] // CLI utility for future use

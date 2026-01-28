@@ -12,6 +12,7 @@ pub const MINIMAX_SLATE_RGB: (u8, u8, u8) = (53, 60, 67); // #353C43
 pub const MINIMAX_SILVER_RGB: (u8, u8, u8) = (201, 205, 212); // #C9CDD4
 pub const MINIMAX_SNOW_RGB: (u8, u8, u8) = (247, 248, 250); // #F7F8FA
 pub const MINIMAX_GREEN_RGB: (u8, u8, u8) = (74, 222, 128); // #4ADE80
+pub const MINIMAX_YELLOW_RGB: (u8, u8, u8) = (250, 204, 21); // #FACC15
 
 pub const MINIMAX_BLUE: Color =
     Color::Rgb(MINIMAX_BLUE_RGB.0, MINIMAX_BLUE_RGB.1, MINIMAX_BLUE_RGB.2);
@@ -48,6 +49,11 @@ pub const MINIMAX_GREEN: Color = Color::Rgb(
     MINIMAX_GREEN_RGB.0,
     MINIMAX_GREEN_RGB.1,
     MINIMAX_GREEN_RGB.2,
+);
+pub const MINIMAX_YELLOW: Color = Color::Rgb(
+    MINIMAX_YELLOW_RGB.0,
+    MINIMAX_YELLOW_RGB.1,
+    MINIMAX_YELLOW_RGB.2,
 );
 
 pub const TEXT_PRIMARY: Color = MINIMAX_SNOW;

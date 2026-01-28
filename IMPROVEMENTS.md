@@ -108,33 +108,87 @@ This document summarizes the improvements made to bring MiniMax CLI to the level
 - `src/core/engine.rs` - Added compaction handling
 - `src/rlm.rs` - Added helper methods for debug info
 
-## Remaining Features for Future Work
+## Phase 11: Interactive Setup Wizard ✅
 
-### Phase 5: Image Paste Support
-- Support pasting images from clipboard (Ctrl-V)
-- Convert images to base64 for model input
-- Display image placeholders in input
+### `/setup` Command
+- Interactive wizard for first-time configuration
+- Steps:
+  1. Welcome message
+  2. Region selection (US or China base URL)
+  3. API key input with validation
+  4. Default model selection (MiniMax-M2.1, MiniMax-Text-01, MiniMax-Coding-01)
+  5. Default mode selection (Normal, Agent, YOLO)
+  6. Shell permissions (yes/no)
+  7. Summary and confirmation
+- Saves to `~/.minimax/config.toml`
+- Automatically reloads configuration
 
-### Phase 7: Flow Skills
-- Agent Flow diagram execution
-- Workflow-based skill execution
-- Node-based processing
+## Phase 12: YOLO Mode Toggle ✅
 
-### Phase 8: Better File Path Completion
-- `@` path completion in input
-- Fuzzy matching for file paths
-- Directory traversal support
+### `/yolo` Command
+- Toggles YOLO mode on/off (previously only enabled)
+- Shows warning when enabling with ⚠️ emoji
+- Returns to Normal mode when disabling
+- Shows current status when called without arguments
 
-### Phase 10: Multi-provider Support
-- Support multiple AI providers beyond MiniMax
-- Unified interface for different APIs
-- Provider switching at runtime
+## Phase 13: Hard Reset Command ✅
+
+### `/reset` Command
+- Comprehensive session reset
+- Clears: conversation history, todos, plan state, queued messages
+- Resets: context/compaction state, recent files, token tracking
+- More thorough than `/clear`
+
+## Phase 14: Auto-Compaction Triggering ✅
+
+### Automatic Context Compaction
+- Triggers automatically when auto_compact is enabled
+- Thresholds: 80,000 tokens OR 30 messages
+- Shows status message when compaction occurs
+- Uses existing compaction infrastructure
+- Configurable via `/set auto_compact true --save`
+
+## Phase 15: Input History Persistence ✅
+
+### Persistent Command History
+- Saves to `~/.config/minimax/input_history.txt`
+- Loads on startup
+- Filters out slash commands and duplicates
+- Configurable max history size
+
+## Phase 16: MCP Status Command ✅
+
+### `/mcp` Command
+- Shows connected MCP servers
+- Displays connection status (✓ connected, ✗ error, ○ disabled)
+- Lists tools provided by each server
+- Shows server configuration
+
+## Phase 17: Session Management Commands ✅
+
+### `/sessions` and `/resume` Commands
+- Interactive session picker
+- Lists all saved sessions with IDs and timestamps
+- Shows currently active session
+- Fuzzy search for filtering sessions
+- Switch between sessions without restarting
+
+## Phase 18: Interactive Model Picker ✅
+
+### Enhanced `/model` Command
+- Interactive picker when called without arguments
+- Shows available MiniMax models with descriptions:
+  - MiniMax-M2.1 (general purpose)
+  - MiniMax-Text-01 (long context)
+  - MiniMax-Coding-01 (code generation)
+- Validates model names when called with arguments
+- Persists selection to settings
 
 ## Testing
 
-All 268 tests pass:
+All 296 tests pass:
 ```
-test result: ok. 268 passed; 0 failed; 0 ignored
+test result: ok. 296 passed; 0 failed; 0 ignored
 ```
 
 ## Build
@@ -178,8 +232,20 @@ $ npm test
 | /reload command | ✅ | ❌ | ❌ | ✅ |
 | /usage command | ✅ | ❌ | ❌ | ✅ |
 | Manual /compact | ✅ | ❌ | ❌ | ✅ |
+| Auto-compaction | ✅ | ❌ | ❌ | ✅ |
 | Ctrl-J multiline | ✅ | ❌ | ❌ | ✅ |
 | Context meter | ✅ | ✅ | ✅ | ✅ |
 | Session management | ✅ | ✅ | ✅ | ✅ |
 | Skills system | ✅ | ❌ | ❌ | ✅ |
 | MCP support | ✅ | ❌ | ✅ | ✅ |
+| /mcp status | ✅ | ❌ | ❌ | ✅ |
+| /sessions | ✅ | ✅ | ✅ | ✅ |
+| /resume | ✅ | ❌ | ❌ | ✅ |
+| /setup wizard | ✅ | ❌ | ❌ | ✅ |
+| /yolo toggle | ✅ | ❌ | ❌ | ✅ |
+| /reset | ✅ | ❌ | ❌ | ✅ |
+| Interactive /model | ✅ | ❌ | ❌ | ✅ |
+| Input history persistence | ✅ | ✅ | ❌ | ✅ |
+| RLM mode | ❌ | ❌ | ❌ | ✅ (unique) |
+| Duo mode | ❌ | ❌ | ❌ | ✅ (unique) |
+| Media generation | ❌ | ❌ | ❌ | ✅ (unique) |

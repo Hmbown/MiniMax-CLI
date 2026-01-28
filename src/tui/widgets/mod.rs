@@ -244,11 +244,28 @@ impl Renderable for ComposerWidget<'_> {
 pub struct ApprovalWidget<'a> {
     request: &'a ApprovalRequest,
     selected: usize,
+    params_display: Option<String>,
 }
 
 impl<'a> ApprovalWidget<'a> {
     pub fn new(request: &'a ApprovalRequest, selected: usize) -> Self {
-        Self { request, selected }
+        Self {
+            request,
+            selected,
+            params_display: None,
+        }
+    }
+
+    pub fn with_expanded(
+        request: &'a ApprovalRequest,
+        selected: usize,
+        params_display: &str,
+    ) -> Self {
+        Self {
+            request,
+            selected,
+            params_display: Some(params_display.to_string()),
+        }
     }
 }
 
@@ -318,8 +335,9 @@ impl Renderable for ApprovalWidget<'_> {
         }
 
         lines.push(Line::from(""));
-        let params_str = self.request.params_display();
-        let params_truncated = crate::utils::truncate_with_ellipsis(&params_str, 50, "...");
+        let fallback_params = self.request.params_display();
+        let params_str = self.params_display.as_deref().unwrap_or(&fallback_params);
+        let params_truncated = crate::utils::truncate_with_ellipsis(params_str, 50, "...");
         lines.push(Line::from(Span::styled(
             format!("  Params: {params_truncated}"),
             Style::default().fg(palette::TEXT_MUTED),

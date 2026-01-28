@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::models::{ContentBlock, Message};
 use crate::palette;
+use crate::tui::syntax;
 
 // === Constants ===
 
@@ -27,6 +28,11 @@ pub enum HistoryCell {
     System { content: String },
     ThinkingSummary { summary: String },
     Tool(ToolCell),
+    /// Error message with optional recovery hint
+    Error {
+        message: String,
+        suggestion: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +65,9 @@ impl HistoryCell {
                 render_message("Thinking", summary, thinking_style(), width)
             }
             HistoryCell::Tool(cell) => cell.lines(width),
+            HistoryCell::Error { message, suggestion } => {
+                render_error(message, suggestion.as_deref(), width)
+            }
         }
     }
 
@@ -839,28 +848,193 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
     let mut lines = Vec::new();
-    for (i, line) in content.lines().enumerate() {
-        let wrapped = wrap_text(line, content_width);
-        for (j, part) in wrapped.iter().enumerate() {
-            if i == 0 && j == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
-                    Span::raw(" "),
-                    Span::styled(part.to_string(), style),
-                ]));
-            } else {
-                let indent = " ".repeat(prefix_width + 1);
-                lines.push(Line::from(vec![
-                    Span::raw(indent),
-                    Span::styled(part.to_string(), style),
-                ]));
+    
+    // Parse content for code blocks and render with syntax highlighting
+    let segments = parse_message_segments(content);
+    let mut first_line = true;
+    
+    for segment in segments {
+        match segment {
+            MessageSegment::Text(text) => {
+                // Render regular text with wrapping
+                for line in text.lines() {
+                    let wrapped = wrap_text(line, content_width);
+                    for (j, part) in wrapped.iter().enumerate() {
+                        if first_line && j == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
+                                Span::raw(" "),
+                                Span::styled(part.to_string(), style),
+                            ]));
+                            first_line = false;
+                        } else {
+                            let indent = " ".repeat(prefix_width + 1);
+                            lines.push(Line::from(vec![
+                                Span::raw(indent),
+                                Span::styled(part.to_string(), style),
+                            ]));
+                        }
+                    }
+                    if line.is_empty() {
+                        if first_line {
+                            lines.push(Line::from(vec![
+                                Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
+                                Span::raw(" "),
+                            ]));
+                            first_line = false;
+                        } else {
+                            lines.push(Line::from(""));
+                        }
+                    }
+                }
+            }
+            MessageSegment::CodeBlock { language, code } => {
+                // Render code block with syntax highlighting
+                let highlighted = syntax::highlight_code(&code, &language);
+                
+                // Add a blank line before code block if not first
+                if !first_line {
+                    lines.push(Line::from(""));
+                }
+                
+                // Show language tag
+                if !language.is_empty() {
+                    let lang_indent = " ".repeat(prefix_width + 1);
+                    lines.push(Line::from(vec![
+                        Span::raw(lang_indent),
+                        Span::styled(
+                            format!("[{language}]"),
+                            Style::default().fg(palette::TEXT_DIM).italic(),
+                        ),
+                    ]));
+                }
+                
+                // Render highlighted code lines with indentation
+                for code_line in highlighted {
+                    let indent = " ".repeat(prefix_width + 5); // Extra indent for code
+                    let mut indented_spans = vec![Span::raw(indent)];
+                    
+                    // Wrap the code line if it's too long
+                    let line_content: String = code_line
+                        .spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
+                    
+                    let wrapped_parts = wrap_text(&line_content, content_width.saturating_sub(4));
+                    
+                    for (idx, part) in wrapped_parts.iter().enumerate() {
+                        if idx == 0 {
+                            // First part with proper indentation and original styling
+                            let indent = " ".repeat(prefix_width + 5);
+                            // Recreate the styled spans for this part
+                            if code_line.spans.len() == 1 {
+                                // Single span - simple case
+                                let mut new_line = vec![Span::raw(indent)];
+                                new_line.push(Span::styled(
+                                    part.to_string(),
+                                    code_line.spans[0].style,
+                                ));
+                                lines.push(Line::from(new_line));
+                            } else {
+                                // Multiple spans - highlight the whole wrapped part
+                                let mut new_line = vec![Span::raw(indent)];
+                                new_line.push(Span::styled(
+                                    part.to_string(),
+                                    Style::default().fg(palette::TEXT_PRIMARY),
+                                ));
+                                lines.push(Line::from(new_line));
+                            }
+                        } else {
+                            // Continuation lines
+                            let cont_indent = " ".repeat(prefix_width + 6);
+                            lines.push(Line::from(vec![
+                                Span::raw(cont_indent),
+                                Span::styled(part.to_string(), Style::default().fg(palette::TEXT_PRIMARY)),
+                            ]));
+                        }
+                    }
+                }
+                
+                // Add a blank line after code block
+                lines.push(Line::from(""));
+                first_line = false;
             }
         }
-        if line.is_empty() {
-            lines.push(Line::from(""));
+    }
+    
+    lines
+}
+
+/// A segment of message content - either plain text or a code block.
+#[derive(Debug, Clone)]
+enum MessageSegment {
+    Text(String),
+    CodeBlock { language: String, code: String },
+}
+
+/// Parse message content into text and code block segments.
+fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
+    let mut segments = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+    let mut current_text = String::new();
+    
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+        
+        if trimmed.starts_with("```") {
+            // Flush current text before code block
+            if !current_text.is_empty() {
+                // Remove trailing newlines
+                while current_text.ends_with('\n') {
+                    current_text.pop();
+                }
+                segments.push(MessageSegment::Text(current_text));
+                current_text = String::new();
+            }
+            
+            // Parse code block
+            let lang = trimmed[3..].trim().to_string();
+            let mut code_lines = Vec::new();
+            i += 1;
+            
+            while i < lines.len() && !lines[i].trim_start().starts_with("```") {
+                code_lines.push(lines[i]);
+                i += 1;
+            }
+            
+            // Skip the closing ```
+            if i < lines.len() {
+                i += 1;
+            }
+            
+            segments.push(MessageSegment::CodeBlock {
+                language: lang,
+                code: code_lines.join("\n"),
+            });
+        } else {
+            // Regular text line
+            if !current_text.is_empty() {
+                current_text.push('\n');
+            }
+            current_text.push_str(line);
+            i += 1;
         }
     }
-    lines
+    
+    // Flush remaining text
+    if !current_text.is_empty() {
+        segments.push(MessageSegment::Text(current_text));
+    }
+    
+    // If no segments were created, treat the whole content as text
+    if segments.is_empty() && !content.is_empty() {
+        segments.push(MessageSegment::Text(content.to_string()));
+    }
+    
+    segments
 }
 
 fn render_command(command: &str, width: u16) -> Vec<Line<'static>> {
@@ -1064,6 +1238,64 @@ fn thinking_style() -> Style {
     Style::default()
         .fg(palette::TEXT_MUTED)
         .add_modifier(Modifier::ITALIC | Modifier::DIM)
+}
+
+fn error_style() -> Style {
+    Style::default().fg(palette::STATUS_ERROR)
+}
+
+fn error_hint_style() -> Style {
+    Style::default()
+        .fg(palette::MINIMAX_YELLOW)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Render an error message with an optional recovery hint.
+fn render_error(message: &str, suggestion: Option<&str>, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let error_prefix = "Error";
+    let prefix_width = error_prefix.width() + 2; // "Error: "
+    let content_width = width.saturating_sub(prefix_width as u16) as usize;
+
+    if content_width == 0 {
+        return lines;
+    }
+
+    // Wrap the message text
+    let wrapped = wrap_text(message, content_width);
+
+    // Error header with first line
+    if let Some(first_line) = wrapped.first() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{error_prefix}: "),
+                error_style().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(first_line.clone(), error_style()),
+        ]));
+    }
+
+    // Remaining lines with indentation
+    for line in wrapped.iter().skip(1) {
+        lines.push(Line::from(Span::styled(
+            format!("{:prefix_width$}{}", "", line),
+            error_style(),
+        )));
+    }
+
+    // Add the suggestion with distinct styling
+    if let Some(hint) = suggestion {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:prefix_width$}", ""),
+                Style::default(),
+            ),
+            Span::styled("Try: ", error_hint_style()),
+            Span::styled(hint.to_string(), Style::default().fg(palette::MINIMAX_YELLOW)),
+        ]));
+    }
+
+    lines
 }
 
 #[cfg(test)]

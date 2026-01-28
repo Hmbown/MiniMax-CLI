@@ -1,4 +1,4 @@
-//! Session commands: save, load, compact, export
+//! Session commands: save, load, compact, export, reset
 
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -8,6 +8,7 @@ use crate::tui::app::App;
 use crate::tui::history::{HistoryCell, history_cells_from_message};
 
 use super::CommandResult;
+use crate::tools::plan::PlanState;
 
 /// Save session to file
 pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
@@ -19,12 +20,14 @@ pub fn save(app: &mut App, path: Option<&str>) -> CommandResult {
     };
 
     let messages = app.api_messages.clone();
+    let pinned_messages = app.pinned_messages.clone();
     let session = create_saved_session(
         &messages,
         &app.model,
         &app.workspace,
         u64::from(app.total_tokens),
         app.system_prompt.as_ref(),
+        pinned_messages,
     );
 
     let sessions_dir = save_path
@@ -90,6 +93,7 @@ pub fn load(app: &mut App, path: Option<&str>) -> CommandResult {
     if let Some(sp) = session.system_prompt {
         app.system_prompt = Some(crate::models::SystemPrompt::Text(sp));
     }
+    app.pinned_messages = session.pinned_messages;
     app.recalculate_context_tokens();
     app.scroll_to_bottom();
 
@@ -154,6 +158,7 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
             HistoryCell::System { content } => ("*System:*", content.clone()),
             HistoryCell::ThinkingSummary { summary } => ("*Thinking:*", summary.clone()),
             HistoryCell::Tool(tool) => ("**Tool:**", render_tool_cell(tool, 80)),
+            HistoryCell::Error { message, .. } => ("*Error:*", message.clone()),
         };
 
         let _ = write!(content, "{}\n\n{}\n\n---\n\n", role, body.trim());
@@ -163,6 +168,62 @@ pub fn export(app: &mut App, path: Option<&str>) -> CommandResult {
         Ok(()) => CommandResult::message(format!("Exported to {}", export_path.display())),
         Err(e) => CommandResult::error(format!("Failed to export: {e}")),
     }
+}
+
+/// Hard reset of the session - clears everything to fresh state
+pub fn reset(app: &mut App) -> CommandResult {
+    // 1. Clear conversation history (like /clear)
+    app.history.clear();
+    app.mark_history_updated();
+    app.api_messages.clear();
+    app.transcript_selection.clear();
+    app.total_conversation_tokens = 0;
+    app.total_tokens = 0;
+
+    // 2. Reset all todos
+    app.clear_todos();
+
+    // 3. Reset plan state
+    if let Ok(mut plan) = app.plan_state.lock() {
+        *plan = PlanState::default();
+    }
+
+    // 4. Clear any queued messages
+    app.queued_messages.clear();
+    app.queued_draft = None;
+
+    // 5. Reset context/compaction state
+    app.session_cost = 0.0;
+    app.tool_log.clear();
+    app.last_prompt_tokens = None;
+    app.last_completion_tokens = None;
+    app.last_usage_at = None;
+
+    // Clear reasoning and tool state
+    app.reasoning_buffer.clear();
+    app.reasoning_header = None;
+    app.last_reasoning = None;
+    app.pending_tool_uses.clear();
+    app.tool_cells.clear();
+    app.exploring_cell = None;
+    app.exploring_entries.clear();
+    app.ignored_tool_calls.clear();
+    app.last_exec_wait_command = None;
+    app.streaming_message_index = None;
+
+    // Clear recent files and process state
+    app.recent_files.clear();
+    app.current_process = None;
+
+    // Reset turn state
+    app.turn_started_at = None;
+    app.is_loading = false;
+
+    // Clear pinned messages
+    app.clear_pins();
+
+    // 6. Show confirmation message
+    CommandResult::message("Session reset - all history, todos, and state cleared")
 }
 
 fn render_tool_cell(tool: &crate::tui::history::ToolCell, width: u16) -> String {
