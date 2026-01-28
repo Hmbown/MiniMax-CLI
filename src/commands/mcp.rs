@@ -50,9 +50,7 @@ pub fn mcp_status(app: &mut App) -> CommandResult {
                     let all_tools = pool.all_tools();
                     let server_tools: Vec<_> = all_tools
                         .iter()
-                        .filter(|(full_name, _)| {
-                            full_name.starts_with(&format!("mcp_{}_", name))
-                        })
+                        .filter(|(full_name, _)| full_name.starts_with(&format!("mcp_{}_", name)))
                         .map(|(_, tool)| tool.name.as_str())
                         .collect();
 

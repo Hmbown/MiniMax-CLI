@@ -226,7 +226,10 @@ impl ModalView for ApprovalView {
             KeyCode::Char('a') => self.emit_decision(ReviewDecision::ApprovedForSession, false),
             KeyCode::Char('n') => self.emit_decision(ReviewDecision::Denied, false),
             KeyCode::Esc => self.emit_decision(ReviewDecision::Abort, false),
-            KeyCode::Char('e') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+            KeyCode::Char('e')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
                 self.toggle_expanded();
                 ViewAction::None
@@ -237,8 +240,11 @@ impl ModalView for ApprovalView {
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         let params_display = self.params_display_expanded();
-        let approval_widget =
-            crate::tui::widgets::ApprovalWidget::with_expanded(&self.request, self.selected, &params_display);
+        let approval_widget = crate::tui::widgets::ApprovalWidget::with_expanded(
+            &self.request,
+            self.selected,
+            &params_display,
+        );
         approval_widget.render(area, buf);
     }
 

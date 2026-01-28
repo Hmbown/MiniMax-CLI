@@ -23,10 +23,19 @@ const TOOL_TEXT_LIMIT: usize = 240;
 /// Renderable history cell for user/assistant/system entries.
 #[derive(Debug, Clone)]
 pub enum HistoryCell {
-    User { content: String },
-    Assistant { content: String, streaming: bool },
-    System { content: String },
-    ThinkingSummary { summary: String },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: String,
+        streaming: bool,
+    },
+    System {
+        content: String,
+    },
+    ThinkingSummary {
+        summary: String,
+    },
     Tool(ToolCell),
     /// Error message with optional recovery hint
     Error {
@@ -65,9 +74,10 @@ impl HistoryCell {
                 render_message("Thinking", summary, thinking_style(), width)
             }
             HistoryCell::Tool(cell) => cell.lines(width),
-            HistoryCell::Error { message, suggestion } => {
-                render_error(message, suggestion.as_deref(), width)
-            }
+            HistoryCell::Error {
+                message,
+                suggestion,
+            } => render_error(message, suggestion.as_deref(), width),
         }
     }
 
@@ -848,11 +858,11 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
     let prefix_width_u16 = u16::try_from(prefix_width.saturating_add(2)).unwrap_or(u16::MAX);
     let content_width = usize::from(width.saturating_sub(prefix_width_u16).max(1));
     let mut lines = Vec::new();
-    
+
     // Parse content for code blocks and render with syntax highlighting
     let segments = parse_message_segments(content);
     let mut first_line = true;
-    
+
     for segment in segments {
         match segment {
             MessageSegment::Text(text) => {
@@ -862,7 +872,10 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
                     for (j, part) in wrapped.iter().enumerate() {
                         if first_line && j == 0 {
                             lines.push(Line::from(vec![
-                                Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    prefix.to_string(),
+                                    style.add_modifier(Modifier::BOLD),
+                                ),
                                 Span::raw(" "),
                                 Span::styled(part.to_string(), style),
                             ]));
@@ -878,7 +891,10 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
                     if line.is_empty() {
                         if first_line {
                             lines.push(Line::from(vec![
-                                Span::styled(prefix.to_string(), style.add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    prefix.to_string(),
+                                    style.add_modifier(Modifier::BOLD),
+                                ),
                                 Span::raw(" "),
                             ]));
                             first_line = false;
@@ -891,12 +907,12 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
             MessageSegment::CodeBlock { language, code } => {
                 // Render code block with syntax highlighting
                 let highlighted = syntax::highlight_code(&code, &language);
-                
+
                 // Add a blank line before code block if not first
                 if !first_line {
                     lines.push(Line::from(""));
                 }
-                
+
                 // Show language tag
                 if !language.is_empty() {
                     let lang_indent = " ".repeat(prefix_width + 1);
@@ -908,19 +924,15 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
                         ),
                     ]));
                 }
-                
+
                 // Render highlighted code lines with indentation
                 for code_line in highlighted {
-                    
                     // Wrap the code line if it's too long
-                    let line_content: String = code_line
-                        .spans
-                        .iter()
-                        .map(|s| s.content.as_ref())
-                        .collect();
-                    
+                    let line_content: String =
+                        code_line.spans.iter().map(|s| s.content.as_ref()).collect();
+
                     let wrapped_parts = wrap_text(&line_content, content_width.saturating_sub(4));
-                    
+
                     for (idx, part) in wrapped_parts.iter().enumerate() {
                         if idx == 0 {
                             // First part with proper indentation and original styling
@@ -929,10 +941,8 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
                             if code_line.spans.len() == 1 {
                                 // Single span - simple case
                                 let mut new_line = vec![Span::raw(indent)];
-                                new_line.push(Span::styled(
-                                    part.to_string(),
-                                    code_line.spans[0].style,
-                                ));
+                                new_line
+                                    .push(Span::styled(part.to_string(), code_line.spans[0].style));
                                 lines.push(Line::from(new_line));
                             } else {
                                 // Multiple spans - highlight the whole wrapped part
@@ -948,19 +958,22 @@ fn render_message(prefix: &str, content: &str, style: Style, width: u16) -> Vec<
                             let cont_indent = " ".repeat(prefix_width + 6);
                             lines.push(Line::from(vec![
                                 Span::raw(cont_indent),
-                                Span::styled(part.to_string(), Style::default().fg(palette::TEXT_PRIMARY)),
+                                Span::styled(
+                                    part.to_string(),
+                                    Style::default().fg(palette::TEXT_PRIMARY),
+                                ),
                             ]));
                         }
                     }
                 }
-                
+
                 // Add a blank line after code block
                 lines.push(Line::from(""));
                 first_line = false;
             }
         }
     }
-    
+
     lines
 }
 
@@ -977,11 +990,11 @@ fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
     let mut current_text = String::new();
-    
+
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
-        
+
         if trimmed.starts_with("```") {
             // Flush current text before code block
             if !current_text.is_empty() {
@@ -992,22 +1005,22 @@ fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
                 segments.push(MessageSegment::Text(current_text));
                 current_text = String::new();
             }
-            
+
             // Parse code block
             let lang = trimmed[3..].trim().to_string();
             let mut code_lines = Vec::new();
             i += 1;
-            
+
             while i < lines.len() && !lines[i].trim_start().starts_with("```") {
                 code_lines.push(lines[i]);
                 i += 1;
             }
-            
+
             // Skip the closing ```
             if i < lines.len() {
                 i += 1;
             }
-            
+
             segments.push(MessageSegment::CodeBlock {
                 language: lang,
                 code: code_lines.join("\n"),
@@ -1021,17 +1034,17 @@ fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
             i += 1;
         }
     }
-    
+
     // Flush remaining text
     if !current_text.is_empty() {
         segments.push(MessageSegment::Text(current_text));
     }
-    
+
     // If no segments were created, treat the whole content as text
     if segments.is_empty() && !content.is_empty() {
         segments.push(MessageSegment::Text(content.to_string()));
     }
-    
+
     segments
 }
 
@@ -1284,12 +1297,12 @@ fn render_error(message: &str, suggestion: Option<&str>, width: u16) -> Vec<Line
     // Add the suggestion with distinct styling
     if let Some(hint) = suggestion {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:prefix_width$}", ""),
-                Style::default(),
-            ),
+            Span::styled(format!("{:prefix_width$}", ""), Style::default()),
             Span::styled("Try: ", error_hint_style()),
-            Span::styled(hint.to_string(), Style::default().fg(palette::MINIMAX_YELLOW)),
+            Span::styled(
+                hint.to_string(),
+                Style::default().fg(palette::MINIMAX_YELLOW),
+            ),
         ]));
     }
 

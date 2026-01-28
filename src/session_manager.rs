@@ -374,7 +374,8 @@ mod tests {
         // Create a few sessions
         for i in 0..3 {
             let messages = vec![make_test_message("user", &format!("Session {i}"))];
-            let session = create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
+            let session =
+                create_saved_session(&messages, "test-model", tmp.path(), 100, None, vec![]);
             manager.save_session(&session).expect("save");
         }
 

@@ -102,8 +102,8 @@ impl Default for EngineConfig {
             plan_state: new_shared_plan_state(),
             rlm_session: Arc::new(Mutex::new(RlmSession::default())),
             duo_session: Arc::new(Mutex::new(DuoSession::new())),
-            cache_system: true, // Enable by default
-            cache_tools: true,  // Enable by default
+            cache_system: true,  // Enable by default
+            cache_tools: true,   // Enable by default
             auto_compact: false, // Disabled by default
         }
     }
@@ -1569,8 +1569,10 @@ impl Engine {
 
         match crate::compaction::compact_messages(client, &self.session.messages, &config).await {
             Ok((messages, summary_prompt)) => {
-                let merged_system =
-                    crate::compaction::merge_system_prompts(self.session.system_prompt.as_ref(), summary_prompt);
+                let merged_system = crate::compaction::merge_system_prompts(
+                    self.session.system_prompt.as_ref(),
+                    summary_prompt,
+                );
 
                 self.session.messages = messages;
                 self.session.system_prompt = merged_system;
@@ -1585,7 +1587,9 @@ impl Engine {
 
                 let _ = self
                     .tx_event
-                    .send(Event::status("Context auto-compacted successfully".to_string()))
+                    .send(Event::status(
+                        "Context auto-compacted successfully".to_string(),
+                    ))
                     .await;
             }
             Err(err) => {

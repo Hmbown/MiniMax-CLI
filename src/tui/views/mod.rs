@@ -272,7 +272,9 @@ impl ModalView for HelpView {
         help_lines.push(Line::from(
             "  Ctrl+J       - Insert newline (multiline input)",
         ));
-        help_lines.push(Line::from("  Alt+Enter    - Insert newline (multiline input)"));
+        help_lines.push(Line::from(
+            "  Alt+Enter    - Insert newline (multiline input)",
+        ));
         help_lines.push(Line::from("  Ctrl+D       - Exit when input is empty"));
         help_lines.push(Line::from("  Ctrl+W       - Delete word backward"));
         help_lines.push(Line::from("  Ctrl+K       - Delete to end of line"));

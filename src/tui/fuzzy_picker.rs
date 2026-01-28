@@ -139,7 +139,7 @@ impl FuzzyPicker {
             // Find the @ trigger position
             let before_at = &current_input[..self.cursor_pos];
             let after_cursor = &current_input[self.cursor_pos..];
-            
+
             // Remove any partial path after @ in the prefix
             let at_pos = before_at.rfind('@');
             let base = if let Some(pos) = at_pos {
@@ -147,8 +147,13 @@ impl FuzzyPicker {
             } else {
                 before_at
             };
-            
-            format!("{}{}{}", base, selection.trim_start_matches('@'), after_cursor)
+
+            format!(
+                "{}{}{}",
+                base,
+                selection.trim_start_matches('@'),
+                after_cursor
+            )
         })
     }
 
@@ -175,7 +180,7 @@ impl FuzzyPicker {
                 .filter_map(|p| {
                     let path_str = p.to_string_lossy();
                     let path_lower = path_str.to_lowercase();
-                    
+
                     if let Some((score, indices)) = fuzzy_match(&path_lower, &query_lower) {
                         Some(FuzzyMatch {
                             path: p.clone(),
@@ -187,13 +192,13 @@ impl FuzzyPicker {
                     }
                 })
                 .collect();
-            
+
             // Sort by score descending
             scored.sort_by(|a, b| b.score.cmp(&a.score));
             scored.truncate(MAX_VISIBLE_MATCHES);
             self.matches = scored;
         }
-        
+
         // Reset selection if out of bounds
         if self.selected >= self.matches.len() {
             self.selected = 0;
@@ -274,7 +279,7 @@ pub fn render<B: Backend>(f: &mut Frame, picker: &FuzzyPicker, area: Rect) {
             let mut spans = Vec::new();
             let chars: Vec<char> = path_str.chars().collect();
             let mut last_idx = 0;
-            
+
             for &idx in &m.highlight_indices {
                 if idx > last_idx && last_idx < chars.len() {
                     spans.push(Span::styled(
@@ -285,16 +290,18 @@ pub fn render<B: Backend>(f: &mut Frame, picker: &FuzzyPicker, area: Rect) {
                 if idx < chars.len() {
                     spans.push(Span::styled(
                         chars[idx].to_string(),
-                        style.add_modifier(Modifier::BOLD).fg(if i == picker.selected {
-                            crate::palette::MINIMAX_SNOW
-                        } else {
-                            crate::palette::MINIMAX_YELLOW
-                        }),
+                        style
+                            .add_modifier(Modifier::BOLD)
+                            .fg(if i == picker.selected {
+                                crate::palette::MINIMAX_SNOW
+                            } else {
+                                crate::palette::MINIMAX_YELLOW
+                            }),
                     ));
                     last_idx = idx + 1;
                 }
             }
-            
+
             if last_idx < chars.len() {
                 spans.push(Span::styled(
                     chars[last_idx..].iter().collect::<String>(),
@@ -399,9 +406,7 @@ fn index_paths(workspace: &Path) -> Vec<PathBuf> {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let file_name = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 if path.is_dir() {
                     if !skip_dirs.contains(&file_name) && !file_name.starts_with('.') {
@@ -429,32 +434,32 @@ pub fn should_trigger_picker(input: &str, cursor_pos: usize) -> bool {
     if cursor_pos == 0 {
         return false;
     }
-    
+
     // Check if we're right after @ or if @ is in the current "word"
     let before_cursor = &input[..cursor_pos];
-    
+
     // Find the position of the last @ before cursor
     let at_pos = match before_cursor.rfind('@') {
         Some(pos) => pos,
         None => return false,
     };
-    
+
     // Check if @ is preceded by whitespace or start of string
     // This prevents triggering for email addresses like "email@example.com"
     if at_pos > 0 {
         let char_before_at = before_cursor.chars().nth(at_pos - 1);
         match char_before_at {
             Some(c) if c.is_whitespace() => {} // OK - @ is after whitespace
-            None => {} // OK - @ is at start
+            None => {}                         // OK - @ is at start
             _ => return false, // Not OK - @ is after a non-whitespace character (like in email)
         }
     }
-    
+
     // Direct @ trigger (right after @)
     if before_cursor.ends_with('@') {
         return true;
     }
-    
+
     // Check if we're typing after @ without spaces
     let after_at = &before_cursor[at_pos + 1..];
     // Trigger if no spaces after @
@@ -465,7 +470,7 @@ pub fn should_trigger_picker(input: &str, cursor_pos: usize) -> bool {
 #[allow(dead_code)]
 pub fn extract_query(input: &str, cursor_pos: usize) -> Option<String> {
     let before_cursor = &input[..cursor_pos];
-    
+
     if let Some(at_pos) = before_cursor.rfind('@') {
         let query = &before_cursor[at_pos + 1..];
         // Only return if no spaces (part of same "word")
@@ -473,7 +478,7 @@ pub fn extract_query(input: &str, cursor_pos: usize) -> Option<String> {
             return Some(query.to_string());
         }
     }
-    
+
     None
 }
 

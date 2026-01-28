@@ -26,11 +26,7 @@ impl TutorialStep {
         }
     }
 
-    pub const fn with_hint(
-        title: &'static str,
-        content: &'static str,
-        hint: &'static str,
-    ) -> Self {
+    pub const fn with_hint(title: &'static str, content: &'static str, hint: &'static str) -> Self {
         Self {
             title,
             content,
@@ -267,9 +263,7 @@ pub fn render_tutorial(f: &mut ratatui::Frame, area: Rect, tutorial: &Tutorial) 
     if tutorial.is_last() {
         nav_spans.push(Span::styled(
             "[ (f)inish ]",
-            Style::default()
-                .fg(palette::STATUS_SUCCESS)
-                .bold(),
+            Style::default().fg(palette::STATUS_SUCCESS).bold(),
         ));
     } else {
         nav_spans.push(Span::styled(
@@ -290,7 +284,11 @@ pub fn render_tutorial(f: &mut ratatui::Frame, area: Rect, tutorial: &Tutorial) 
 
     // Don't show again checkbox
     lines.push(Line::from(""));
-    let checkbox = if tutorial.dont_show_again { "[x]" } else { "[ ]" };
+    let checkbox = if tutorial.dont_show_again {
+        "[x]"
+    } else {
+        "[ ]"
+    };
     lines.push(Line::from(vec![
         Span::styled(
             format!("{} ", checkbox),
@@ -308,9 +306,7 @@ pub fn render_tutorial(f: &mut ratatui::Frame, area: Rect, tutorial: &Tutorial) 
                 .title(
                     Line::from(vec![Span::styled(
                         " Getting Started ",
-                        Style::default()
-                            .fg(palette::MINIMAX_BLUE)
-                            .bold(),
+                        Style::default().fg(palette::MINIMAX_BLUE).bold(),
                     )])
                     .alignment(Alignment::Center),
                 )

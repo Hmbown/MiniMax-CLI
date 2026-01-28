@@ -24,12 +24,12 @@ use crate::tui::fuzzy_picker::FuzzyPicker;
 use crate::tui::history::{HistoryCell, TranscriptRenderOptions};
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptScroll};
-use crate::tui::selection::TranscriptSelection;
-use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::search_view::SearchResult;
-use crate::tui::views::ViewStack;
+use crate::tui::selection::TranscriptSelection;
 use crate::tui::suggestions::SuggestionEngine;
+use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::tutorial::Tutorial;
+use crate::tui::views::ViewStack;
 use std::sync::{Arc, Mutex};
 
 // === Types ===
@@ -81,10 +81,39 @@ fn remove_char_at(text: &mut String, char_index: usize) -> bool {
 
 /// Check if a character is a word boundary character (punctuation)
 fn is_word_boundary_char(c: char) -> bool {
-    matches!(c,
-        '!' | '"' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '-' | '.' |
-        '/' | ':' | ';' | '<' | '=' | '>' | '?' | '@' | '[' | '\\' | ']' | '^' | '_' | '`' |
-        '{' | '|' | '}' | '~'
+    matches!(
+        c,
+        '!' | '"'
+            | '#'
+            | '$'
+            | '%'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '+'
+            | ','
+            | '-'
+            | '.'
+            | '/'
+            | ':'
+            | ';'
+            | '<'
+            | '='
+            | '>'
+            | '?'
+            | '@'
+            | '['
+            | '\\'
+            | ']'
+            | '^'
+            | '_'
+            | '`'
+            | '{'
+            | '|'
+            | '}'
+            | '~'
     )
 }
 
@@ -330,7 +359,11 @@ impl PinnedMessage {
         if self.content.chars().count() <= max_len {
             self.content.clone()
         } else {
-            let truncated: String = self.content.chars().take(max_len.saturating_sub(3)).collect();
+            let truncated: String = self
+                .content
+                .chars()
+                .take(max_len.saturating_sub(3))
+                .collect();
             format!("{}...", truncated)
         }
     }
@@ -936,7 +969,11 @@ impl App {
                 filtered
             }
             Err(e) => {
-                eprintln!("Warning: Failed to load input history from {}: {}", path.display(), e);
+                eprintln!(
+                    "Warning: Failed to load input history from {}: {}",
+                    path.display(),
+                    e
+                );
                 Vec::new()
             }
         }
@@ -947,15 +984,18 @@ impl App {
         // Reload settings to get current path
         let settings = Settings::load().unwrap_or_default();
         let path = &settings.input_history_path;
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("Warning: Failed to create directory for input history: {}", e);
+                eprintln!(
+                    "Warning: Failed to create directory for input history: {}",
+                    e
+                );
                 return;
             }
         }
-        
+
         // Build content from history, respecting the max limit
         let limit = settings.input_history_max;
         let content = if self.input_history.len() > limit {
@@ -968,9 +1008,13 @@ impl App {
         } else {
             self.input_history.join("\n")
         };
-        
+
         if let Err(e) = std::fs::write(path, content) {
-            eprintln!("Warning: Failed to save input history to {}: {}", path.display(), e);
+            eprintln!(
+                "Warning: Failed to save input history to {}: {}",
+                path.display(),
+                e
+            );
         }
     }
 
@@ -1120,9 +1164,7 @@ impl App {
         };
 
         let (content, source) = match cell {
-            super::history::HistoryCell::User { content } => {
-                (content.clone(), PinSource::User)
-            }
+            super::history::HistoryCell::User { content } => (content.clone(), PinSource::User),
             super::history::HistoryCell::Assistant { content, .. } => {
                 (content.clone(), PinSource::Assistant)
             }
@@ -1134,7 +1176,8 @@ impl App {
             self.pinned_messages.remove(0);
         }
 
-        self.pinned_messages.push(PinnedMessage::new(content, source));
+        self.pinned_messages
+            .push(PinnedMessage::new(content, source));
         true
     }
 

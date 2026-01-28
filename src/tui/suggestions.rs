@@ -226,12 +226,14 @@ impl SuggestionEngine {
         let threshold = (self.token_limit as f32 * CONTEXT_WARNING_THRESHOLD) as u32;
         if current_tokens > threshold {
             let percentage = (current_tokens as f32 / self.token_limit as f32 * 100.0) as u32;
-            self.set_suggestion(Suggestion::new(
-                "context_size",
-                format!("Context at {}% capacity", percentage),
-            )
-            .with_action_hint("Type /compact to free up space")
-            .with_priority(SuggestionPriority::High));
+            self.set_suggestion(
+                Suggestion::new(
+                    "context_size",
+                    format!("Context at {}% capacity", percentage),
+                )
+                .with_action_hint("Type /compact to free up space")
+                .with_priority(SuggestionPriority::High),
+            );
         }
     }
 
@@ -247,12 +249,14 @@ impl SuggestionEngine {
             && (error.contains("boundary") || error.contains("outside") || error.contains("trust"))
         {
             if !self.dismissal_tracker.is_dismissed("workspace_boundary") {
-                self.set_suggestion(Suggestion::new(
-                    "workspace_boundary",
-                    "File operation blocked by workspace boundary",
-                )
-                .with_action_hint("Use /trust to enable access or /yolo for full access")
-                .with_priority(SuggestionPriority::Critical));
+                self.set_suggestion(
+                    Suggestion::new(
+                        "workspace_boundary",
+                        "File operation blocked by workspace boundary",
+                    )
+                    .with_action_hint("Use /trust to enable access or /yolo for full access")
+                    .with_priority(SuggestionPriority::Critical),
+                );
             }
             return;
         }
@@ -260,12 +264,11 @@ impl SuggestionEngine {
         // Permission denied error
         if error.contains("permission") || error.contains("denied") {
             if !self.dismissal_tracker.is_dismissed("permission_error") {
-                self.set_suggestion(Suggestion::new(
-                    "permission_error",
-                    "Permission denied",
-                )
-                .with_action_hint("Check file permissions or use /trust")
-                .with_priority(SuggestionPriority::High));
+                self.set_suggestion(
+                    Suggestion::new("permission_error", "Permission denied")
+                        .with_action_hint("Check file permissions or use /trust")
+                        .with_priority(SuggestionPriority::High),
+                );
             }
             return;
         }
@@ -277,24 +280,22 @@ impl SuggestionEngine {
             || error.contains("API")
         {
             if !self.dismissal_tracker.is_dismissed("network_error") {
-                self.set_suggestion(Suggestion::new(
-                    "network_error",
-                    "Network or API error occurred",
-                )
-                .with_action_hint("Check connection and retry your request")
-                .with_priority(SuggestionPriority::High));
+                self.set_suggestion(
+                    Suggestion::new("network_error", "Network or API error occurred")
+                        .with_action_hint("Check connection and retry your request")
+                        .with_priority(SuggestionPriority::High),
+                );
             }
             return;
         }
 
         // Generic error recovery suggestion
         if !self.dismissal_tracker.is_dismissed("generic_error") {
-            self.set_suggestion(Suggestion::new(
-                "generic_error",
-                "An error occurred",
-            )
-            .with_action_hint("Use /clear to reset or retry your request")
-            .with_priority(SuggestionPriority::Medium));
+            self.set_suggestion(
+                Suggestion::new("generic_error", "An error occurred")
+                    .with_action_hint("Use /clear to reset or retry your request")
+                    .with_priority(SuggestionPriority::Medium),
+            );
         }
     }
 
@@ -306,35 +307,39 @@ impl SuggestionEngine {
 
         // Check for command-specific inline help
         let trimmed = input.trim_start();
-        
+
         // /model command - show model suggestions
         if trimmed == "/model " || trimmed.starts_with("/model ") {
             let after_cmd = trimmed.strip_prefix("/model ").unwrap_or("").trim();
             if after_cmd.is_empty() {
-                self.set_suggestion(Suggestion::new(
-                    "model_suggestions",
-                    "Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash",
-                )
-                .with_action_hint("Type model name or press Enter for picker")
-                .with_priority(SuggestionPriority::Low));
+                self.set_suggestion(
+                    Suggestion::new(
+                        "model_suggestions",
+                        "Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash",
+                    )
+                    .with_action_hint("Type model name or press Enter for picker")
+                    .with_priority(SuggestionPriority::Low),
+                );
             }
             return;
         }
-        
+
         // /mode command - show mode options
         if trimmed == "/mode " || trimmed.starts_with("/mode ") {
             let after_cmd = trimmed.strip_prefix("/mode ").unwrap_or("").trim();
             if after_cmd.is_empty() {
-                self.set_suggestion(Suggestion::new(
-                    "mode_suggestions",
-                    "Options: normal, agent, yolo, rlm, duo, plan",
-                )
-                .with_action_hint("Type mode name or Tab to cycle")
-                .with_priority(SuggestionPriority::Low));
+                self.set_suggestion(
+                    Suggestion::new(
+                        "mode_suggestions",
+                        "Options: normal, agent, yolo, rlm, duo, plan",
+                    )
+                    .with_action_hint("Type mode name or Tab to cycle")
+                    .with_priority(SuggestionPriority::Low),
+                );
             }
             return;
         }
-        
+
         // /set command - show setting keys
         if trimmed == "/set " || trimmed.starts_with("/set ") {
             let after_cmd = trimmed.strip_prefix("/set ").unwrap_or("").trim();
@@ -367,12 +372,11 @@ impl SuggestionEngine {
         let input_lower = input.to_lowercase();
         for keyword in &self.file_keywords {
             if input_lower.contains(keyword) {
-                self.set_suggestion(Suggestion::new(
-                    "file_suggestion",
-                    "Use @filename for file paths",
-                )
-                .with_action_hint("Type @ followed by a filename for auto-completion")
-                .with_priority(SuggestionPriority::Low));
+                self.set_suggestion(
+                    Suggestion::new("file_suggestion", "Use @filename for file paths")
+                        .with_action_hint("Type @ followed by a filename for auto-completion")
+                        .with_priority(SuggestionPriority::Low),
+                );
                 return;
             }
         }
@@ -394,12 +398,11 @@ impl SuggestionEngine {
         }
 
         self.yolo_warning_shown = true;
-        self.set_suggestion(Suggestion::new(
-            "yolo_warning",
-            "YOLO mode enabled - tools auto-approve",
-        )
-        .with_action_hint("Press Tab to switch modes, /trust to control access")
-        .with_priority(SuggestionPriority::High));
+        self.set_suggestion(
+            Suggestion::new("yolo_warning", "YOLO mode enabled - tools auto-approve")
+                .with_action_hint("Press Tab to switch modes, /trust to control access")
+                .with_priority(SuggestionPriority::High),
+        );
     }
 
     /// Check if a long operation is running and suggest cancellation
@@ -421,12 +424,11 @@ impl SuggestionEngine {
             return;
         }
 
-        self.set_suggestion(Suggestion::new(
-            "long_operation",
-            "Operation running for a while",
-        )
-        .with_action_hint("Press Ctrl+C or Esc to cancel")
-        .with_priority(SuggestionPriority::Medium));
+        self.set_suggestion(
+            Suggestion::new("long_operation", "Operation running for a while")
+                .with_action_hint("Press Ctrl+C or Esc to cancel")
+                .with_priority(SuggestionPriority::Medium),
+        );
     }
 
     /// Check for RLM mode specific suggestions
@@ -443,12 +445,11 @@ impl SuggestionEngine {
             return;
         }
 
-        self.set_suggestion(Suggestion::new(
-            "rlm_no_context",
-            "RLM mode has no context loaded",
-        )
-        .with_action_hint("Type @filename to load a file, or chat to use model normally")
-        .with_priority(SuggestionPriority::Medium));
+        self.set_suggestion(
+            Suggestion::new("rlm_no_context", "RLM mode has no context loaded")
+                .with_action_hint("Type @filename to load a file, or chat to use model normally")
+                .with_priority(SuggestionPriority::Medium),
+        );
     }
 
     /// Set a new suggestion, replacing the current one if higher priority
@@ -534,8 +535,7 @@ mod tests {
 
     #[test]
     fn test_suggestion_display_text() {
-        let suggestion = Suggestion::new("test", "Test message")
-            .with_action_hint("Press X");
+        let suggestion = Suggestion::new("test", "Test message").with_action_hint("Press X");
 
         assert_eq!(suggestion.display_text(), "Test message (Press X)");
     }
@@ -670,7 +670,10 @@ mod tests {
 
         // Generic error
         engine.check_last_error("Something went wrong");
-        assert_eq!(engine.current().unwrap().priority, SuggestionPriority::Medium);
+        assert_eq!(
+            engine.current().unwrap().priority,
+            SuggestionPriority::Medium
+        );
 
         engine.clear();
 
@@ -682,6 +685,9 @@ mod tests {
 
         // Workspace boundary (Critical priority)
         engine.check_last_error("outside workspace boundary");
-        assert_eq!(engine.current().unwrap().priority, SuggestionPriority::Critical);
+        assert_eq!(
+            engine.current().unwrap().priority,
+            SuggestionPriority::Critical
+        );
     }
 }

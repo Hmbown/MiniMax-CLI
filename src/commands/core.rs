@@ -56,7 +56,7 @@ use crate::settings::Settings;
 use crate::tui::model_picker::validate_model;
 
 /// Switch or view current model
-/// 
+///
 /// When called without arguments, opens an interactive model picker.
 /// When called with an argument, validates and sets the model directly.
 pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
@@ -66,7 +66,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             let old_model = app.model.clone();
             let new_model = model_info.id.to_string();
             app.model = new_model.clone();
-            
+
             // Persist to settings
             let mut settings = Settings::load().unwrap_or_default();
             settings.default_model = Some(new_model.clone());
@@ -75,7 +75,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                     "Model changed: {old_model} → {new_model} (failed to save: {e})"
                 ));
             }
-            
+
             CommandResult::message(format!(
                 "Model changed: {old_model} → {new_model} (saved)\n\n{}",
                 model_info.description

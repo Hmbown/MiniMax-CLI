@@ -14,17 +14,22 @@ pub fn list_snippets(_app: &mut App) -> CommandResult {
     if registry.is_empty() {
         return CommandResult::message(
             "No snippets available.\n\n\
-             Snippets are loaded from ~/.minimax/snippets.toml".to_string(),
+             Snippets are loaded from ~/.minimax/snippets.toml"
+                .to_string(),
         );
     }
 
     let mut output = format!("Available snippets ({}):\n", registry.len());
     output.push_str("─────────────────────────────\n");
-    
+
     for snippet in registry.list() {
-        let _ = writeln!(output, "  /snippet {:12} - {}", snippet.name, snippet.description);
+        let _ = writeln!(
+            output,
+            "  /snippet {:12} - {}",
+            snippet.name, snippet.description
+        );
     }
-    
+
     let _ = write!(
         output,
         "\nUse /snippet <name> to insert a snippet\nSnippets location: {}",
@@ -32,7 +37,9 @@ pub fn list_snippets(_app: &mut App) -> CommandResult {
     );
 
     if registry.is_using_defaults() {
-        output.push_str("\n\n(Using built-in defaults - create ~/.minimax/snippets.toml to customize)");
+        output.push_str(
+            "\n\n(Using built-in defaults - create ~/.minimax/snippets.toml to customize)",
+        );
     }
 
     CommandResult::message(output)
@@ -55,20 +62,20 @@ pub fn insert_snippet(_app: &mut App, name: Option<&str>) -> CommandResult {
     } else {
         // Not found - suggest similar names
         let similar = registry.find_similar(name, 2);
-        
+
         let mut msg = format!("Snippet '{}' not found.", name);
-        
+
         if !similar.is_empty() {
             msg.push_str(&format!("\n\nDid you mean: {}?", similar.join(", ")));
         }
-        
+
         let available: Vec<String> = registry.list().iter().map(|s| s.name.clone()).collect();
         if !available.is_empty() {
             msg.push_str(&format!("\n\nAvailable snippets: {}", available.join(", ")));
         }
-        
+
         msg.push_str(&format!("\n\nUse /snippets to see all available snippets."));
-        
+
         CommandResult::error(msg)
     }
 }

@@ -96,9 +96,8 @@ pub fn unpin(app: &mut App, arg: Option<&str>) -> CommandResult {
                 ))
             }
         }
-        Err(_) => CommandResult::error(format!(
-            "Invalid argument: {}. Use a number or 'all'.",
-            arg
-        )),
+        Err(_) => {
+            CommandResult::error(format!("Invalid argument: {}. Use a number or 'all'.", arg))
+        }
     }
 }

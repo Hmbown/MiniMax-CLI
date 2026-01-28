@@ -131,25 +131,25 @@ pub struct ParsedInlineSkill {
 #[allow(dead_code)]
 pub fn parse_inline_skill(input: &str) -> Option<ParsedInlineSkill> {
     let trimmed = input.trim_start();
-    
+
     // Check if input starts with /skill:
     let prefix = "/skill:";
     if !trimmed.starts_with(prefix) {
         return None;
     }
-    
+
     let after_prefix = &trimmed[prefix.len()..];
-    
+
     // Find the end of the skill name (first whitespace or end of string)
     let (skill_name, message) = match after_prefix.split_once(|c: char| c.is_whitespace()) {
         Some((name, msg)) => (name.trim(), msg.trim()),
         None => (after_prefix.trim(), ""),
     };
-    
+
     if skill_name.is_empty() {
         return None;
     }
-    
+
     Some(ParsedInlineSkill {
         skill_name: skill_name.to_string(),
         message: message.to_string(),

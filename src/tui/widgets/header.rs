@@ -311,11 +311,7 @@ impl Renderable for HeaderWidget<'_> {
     }
 
     fn desired_height(&self, _width: u16) -> u16 {
-        if self.data.pins.is_empty() {
-            1
-        } else {
-            2
-        }
+        if self.data.pins.is_empty() { 1 } else { 2 }
     }
 }
 

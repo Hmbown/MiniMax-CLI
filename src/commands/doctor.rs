@@ -11,7 +11,7 @@
 //! - Network connectivity (basic check)
 
 use super::CommandResult;
-use crate::config::{has_api_key, Config};
+use crate::config::{Config, has_api_key};
 use crate::mcp::McpPool;
 use crate::palette;
 use crate::settings::Settings;
@@ -112,7 +112,9 @@ fn check_api_key(_app: &App) -> Vec<CheckResult> {
 
     // Check environment variable first
     if std::env::var("MINIMAX_API_KEY").is_ok() {
-        results.push(CheckResult::ok("MINIMAX_API_KEY environment variable is set"));
+        results.push(CheckResult::ok(
+            "MINIMAX_API_KEY environment variable is set",
+        ));
     } else {
         // Check config file
         match Config::load(None, None) {
@@ -227,13 +229,13 @@ fn check_settings() -> Vec<CheckResult> {
                         results.push(CheckResult::ok("Settings loaded successfully"));
                     }
                     Err(e) => {
-                        results.push(CheckResult::warning(format!(
-                            "Settings file issue: {e}"
-                        )));
+                        results.push(CheckResult::warning(format!("Settings file issue: {e}")));
                     }
                 }
             } else {
-                results.push(CheckResult::ok("Settings file does not exist (using defaults)"));
+                results.push(CheckResult::ok(
+                    "Settings file does not exist (using defaults)",
+                ));
             }
         }
         Err(e) => {
@@ -306,7 +308,9 @@ fn check_mcp_servers(app: &App) -> Vec<CheckResult> {
     let config_path = get_mcp_config_path(app);
 
     if !config_path.exists() {
-        results.push(CheckResult::ok("No MCP config (MCP servers not configured)"));
+        results.push(CheckResult::ok(
+            "No MCP config (MCP servers not configured)",
+        ));
         return results;
     }
 
@@ -385,7 +389,10 @@ fn check_sessions() -> Vec<CheckResult> {
                     .filter(|e| {
                         e.as_ref()
                             .map(|e| {
-                                e.path().extension().map(|ext| ext == "json").unwrap_or(false)
+                                e.path()
+                                    .extension()
+                                    .map(|ext| ext == "json")
+                                    .unwrap_or(false)
                             })
                             .unwrap_or(false)
                     })
@@ -440,7 +447,9 @@ fn check_skills() -> Vec<CheckResult> {
             }
         }
     } else {
-        results.push(CheckResult::ok("Skills directory not configured (optional)"));
+        results.push(CheckResult::ok(
+            "Skills directory not configured (optional)",
+        ));
     }
 
     results
@@ -548,7 +557,8 @@ fn format_diagnostic_output(groups: &[(&'static str, Vec<CheckResult>)]) -> Stri
         let _ = writeln!(
             output,
             "{}",
-            "─".repeat(group_name.len())
+            "─"
+                .repeat(group_name.len())
                 .truecolor(muted_r, muted_g, muted_b)
         );
 
@@ -599,8 +609,7 @@ fn format_diagnostic_output(groups: &[(&'static str, Vec<CheckResult>)]) -> Stri
     let _ = writeln!(
         output,
         "{}",
-        "Run /doctor again to refresh diagnostics"
-            .truecolor(muted_r, muted_g, muted_b)
+        "Run /doctor again to refresh diagnostics".truecolor(muted_r, muted_g, muted_b)
     );
 
     output

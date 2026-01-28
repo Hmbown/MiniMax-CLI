@@ -39,8 +39,8 @@ use crate::rlm;
 use crate::session_manager::{SessionManager, create_saved_session, update_session};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
-use crate::tui::event_broker::EventBroker;
 use crate::tui::command_completer::CommandCompleter;
+use crate::tui::event_broker::EventBroker;
 use crate::tui::fuzzy_picker;
 use crate::tui::paste_burst::CharDecision;
 use crate::tui::scrolling::{ScrollDirection, TranscriptScroll};
@@ -539,10 +539,12 @@ async fn run_event_loop(
 
         // Check for long-running operations
         let elapsed = app.turn_started_at.map(|t| t.elapsed().as_secs());
-        app.suggestion_engine.check_long_operation(app.is_loading, elapsed);
+        app.suggestion_engine
+            .check_long_operation(app.is_loading, elapsed);
 
         // Check YOLO mode warning
-        app.suggestion_engine.check_yolo_mode(app.mode == AppMode::Yolo);
+        app.suggestion_engine
+            .check_yolo_mode(app.mode == AppMode::Yolo);
 
         // RLM context hint
         let has_rlm_context = app
@@ -551,8 +553,10 @@ async fn run_event_loop(
             .ok()
             .map(|session| !session.contexts.is_empty())
             .unwrap_or(false);
-        app.suggestion_engine
-            .check_rlm_context(has_rlm_context, app.mode == AppMode::Rlm || app.rlm_repl_active);
+        app.suggestion_engine.check_rlm_context(
+            has_rlm_context,
+            app.mode == AppMode::Rlm || app.rlm_repl_active,
+        );
 
         terminal.draw(|f| render(f, app))?; // app is &mut
 
@@ -644,7 +648,10 @@ async fn run_event_loop(
             // Handle tutorial key events
             if app.tutorial.active {
                 let consumed = handle_tutorial_key(&mut app.tutorial, key);
-                if !consumed && key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if !consumed
+                    && key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     let _ = engine_handle.send(Op::Shutdown).await;
                     return Ok(());
                 }
@@ -677,9 +684,14 @@ async fn run_event_loop(
                             app.current_search_idx = Some(0);
                         }
                         // Scroll to the selected result
-                        if let Some(ref result) = app.search_results.get(app.current_search_idx.unwrap_or(0)) {
+                        if let Some(ref result) =
+                            app.search_results.get(app.current_search_idx.unwrap_or(0))
+                        {
                             // Jump to that cell in history
-                            app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled { cell_index: result.cell_index, line_in_cell: 0 };
+                            app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled {
+                                cell_index: result.cell_index,
+                                line_in_cell: 0,
+                            };
                         }
                         continue;
                     }
@@ -687,16 +699,23 @@ async fn run_event_loop(
                         // Previous result
                         if let Some(idx) = app.current_search_idx {
                             if idx == 0 {
-                                app.current_search_idx = Some(app.search_results.len().saturating_sub(1));
+                                app.current_search_idx =
+                                    Some(app.search_results.len().saturating_sub(1));
                             } else {
                                 app.current_search_idx = Some(idx - 1);
                             }
                         } else {
-                            app.current_search_idx = Some(app.search_results.len().saturating_sub(1));
+                            app.current_search_idx =
+                                Some(app.search_results.len().saturating_sub(1));
                         }
                         // Scroll to the selected result
-                        if let Some(ref result) = app.search_results.get(app.current_search_idx.unwrap_or(0)) {
-                            app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled { cell_index: result.cell_index, line_in_cell: 0 };
+                        if let Some(ref result) =
+                            app.search_results.get(app.current_search_idx.unwrap_or(0))
+                        {
+                            app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled {
+                                cell_index: result.cell_index,
+                                line_in_cell: 0,
+                            };
                         }
                         continue;
                     }
@@ -718,7 +737,11 @@ async fn run_event_loop(
             }
 
             // Handle command completer when active
-            if app.command_completer.as_ref().is_some_and(|c| c.is_active()) {
+            if app
+                .command_completer
+                .as_ref()
+                .is_some_and(|c| c.is_active())
+            {
                 if handle_command_completer_key(app, &key) {
                     continue;
                 }
@@ -863,13 +886,25 @@ async fn run_event_loop(
                                         });
                                     }
                                     AppAction::OpenSessionPicker => {
-                                        app.view_stack.push(crate::tui::session_picker::SessionPicker::new(app.current_session_id.clone()));
+                                        app.view_stack.push(
+                                            crate::tui::session_picker::SessionPicker::new(
+                                                app.current_session_id.clone(),
+                                            ),
+                                        );
                                     }
                                     AppAction::OpenModelPicker => {
-                                        app.view_stack.push(crate::tui::model_picker::ModelPicker::new(app.model.clone()));
+                                        app.view_stack.push(
+                                            crate::tui::model_picker::ModelPicker::new(
+                                                app.model.clone(),
+                                            ),
+                                        );
                                     }
                                     AppAction::OpenHistoryPicker => {
-                                        app.view_stack.push(crate::tui::history_picker::HistoryPicker::new(&app.input_history));
+                                        app.view_stack.push(
+                                            crate::tui::history_picker::HistoryPicker::new(
+                                                &app.input_history,
+                                            ),
+                                        );
                                     }
                                     AppAction::ReloadConfig => {
                                         // Reload configuration from disk
@@ -877,8 +912,11 @@ async fn run_event_loop(
                                         let config_path = std::env::var("MINIMAX_CONFIG_PATH")
                                             .ok()
                                             .map(std::path::PathBuf::from);
-                                        
-                                        match crate::config::Config::load(config_path, profile.as_deref()) {
+
+                                        match crate::config::Config::load(
+                                            config_path,
+                                            profile.as_deref(),
+                                        ) {
                                             Ok(config) => {
                                                 // Apply relevant config changes to the app
                                                 if let Some(model) = &config.default_text_model {
@@ -887,27 +925,32 @@ async fn run_event_loop(
                                                 app.allow_shell = config.allow_shell();
                                                 app.max_subagents = config.max_subagents();
                                                 app.skills_dir = config.skills_dir();
-                                                
+
                                                 // Reload settings
                                                 match crate::settings::Settings::load() {
                                                     Ok(settings) => {
                                                         app.auto_compact = settings.auto_compact;
                                                         app.show_thinking = settings.show_thinking;
-                                                        app.show_tool_details = settings.show_tool_details;
-                                                        app.max_input_history = settings.max_input_history;
-                                                        app.ui_theme = crate::palette::ui_theme(&settings.theme);
-                                                        
+                                                        app.show_tool_details =
+                                                            settings.show_tool_details;
+                                                        app.max_input_history =
+                                                            settings.max_input_history;
+                                                        app.ui_theme = crate::palette::ui_theme(
+                                                            &settings.theme,
+                                                        );
+
                                                         // Apply default mode if set
-                                                        let mode = match settings.default_mode.as_str() {
-                                                            "agent" => AppMode::Agent,
-                                                            "yolo" => AppMode::Yolo,
-                                                            "rlm" => AppMode::Rlm,
-                                                            "duo" => AppMode::Duo,
-                                                            "plan" => AppMode::Plan,
-                                                            _ => AppMode::Normal,
-                                                        };
+                                                        let mode =
+                                                            match settings.default_mode.as_str() {
+                                                                "agent" => AppMode::Agent,
+                                                                "yolo" => AppMode::Yolo,
+                                                                "rlm" => AppMode::Rlm,
+                                                                "duo" => AppMode::Duo,
+                                                                "plan" => AppMode::Plan,
+                                                                _ => AppMode::Normal,
+                                                            };
                                                         app.set_mode(mode);
-                                                        
+
                                                         app.add_message(HistoryCell::System {
                                                             content: "Configuration reloaded successfully.".to_string(),
                                                         });
@@ -921,7 +964,9 @@ async fn run_event_loop(
                                             }
                                             Err(e) => {
                                                 app.add_message(HistoryCell::System {
-                                                    content: format!("Failed to reload config: {e}"),
+                                                    content: format!(
+                                                        "Failed to reload config: {e}"
+                                                    ),
                                                 });
                                             }
                                         }
@@ -1074,7 +1119,9 @@ async fn run_event_loop(
                 }
                 KeyCode::Char(c) => {
                     // Check if typing '@' should trigger the fuzzy picker
-                    if c == '@' && fuzzy_picker::should_trigger_picker(&app.input, app.cursor_position) {
+                    if c == '@'
+                        && fuzzy_picker::should_trigger_picker(&app.input, app.cursor_position)
+                    {
                         app.insert_char(c);
                         app.fuzzy_picker.activate(&app.input, app.cursor_position);
                     } else {
@@ -1083,10 +1130,11 @@ async fn run_event_loop(
                         app.suggestion_engine.check_input_pattern(&app.input);
 
                         if app.input.starts_with('/') {
-                            let should_show = crate::tui::command_completer::should_trigger_completer(
-                                &app.input,
-                                app.cursor_position,
-                            );
+                            let should_show =
+                                crate::tui::command_completer::should_trigger_completer(
+                                    &app.input,
+                                    app.cursor_position,
+                                );
                             if should_show {
                                 if app.command_completer.is_none() {
                                     app.command_completer = Some(CommandCompleter::new());
@@ -1964,7 +2012,7 @@ fn render(f: &mut Frame, app: &mut App) {
 
     if !app.view_stack.is_empty() {
         let buf = f.buffer_mut();
-        
+
         // Check if top view is search - if so, perform search and render results
         if app.view_stack.top_kind() == Some(ModalKind::Search) {
             let mut handled = false;
@@ -2044,7 +2092,9 @@ async fn handle_view_events(app: &mut App, engine_handle: &EngineHandle, events:
                 match result {
                     crate::tui::session_picker::SessionPickerResult::Selected(session_id) => {
                         // Load the session directly
-                        if let Ok(manager) = crate::session_manager::SessionManager::default_location() {
+                        if let Ok(manager) =
+                            crate::session_manager::SessionManager::default_location()
+                        {
                             if let Ok(session) = manager.load_session(&session_id) {
                                 app.api_messages.clone_from(&session.messages);
                                 app.history.clear();
@@ -2055,28 +2105,38 @@ async fn handle_view_events(app: &mut App, engine_handle: &EngineHandle, events:
                                 app.transcript_selection.clear();
                                 app.model.clone_from(&session.metadata.model);
                                 app.workspace.clone_from(&session.metadata.workspace);
-                                app.total_tokens = u32::try_from(session.metadata.total_tokens).unwrap_or(u32::MAX);
+                                app.total_tokens = u32::try_from(session.metadata.total_tokens)
+                                    .unwrap_or(u32::MAX);
                                 app.current_session_id = Some(session.metadata.id.clone());
                                 if let Some(sp) = session.system_prompt {
                                     app.system_prompt = Some(crate::models::SystemPrompt::Text(sp));
                                 }
                                 app.recalculate_context_tokens();
                                 app.scroll_to_bottom();
-                                
+
                                 // Sync with the engine
-                                let _ = engine_handle.send(Op::SyncSession {
-                                    messages: app.api_messages.clone(),
-                                    system_prompt: app.system_prompt.clone(),
-                                    model: app.model.clone(),
-                                    workspace: app.workspace.clone(),
-                                }).await;
-                                
+                                let _ = engine_handle
+                                    .send(Op::SyncSession {
+                                        messages: app.api_messages.clone(),
+                                        system_prompt: app.system_prompt.clone(),
+                                        model: app.model.clone(),
+                                        workspace: app.workspace.clone(),
+                                    })
+                                    .await;
+
                                 app.add_message(HistoryCell::System {
-                                    content: format!("Resumed session {} ({} messages)", &session_id[..8], app.api_messages.len()),
+                                    content: format!(
+                                        "Resumed session {} ({} messages)",
+                                        &session_id[..8],
+                                        app.api_messages.len()
+                                    ),
                                 });
                             } else {
                                 app.add_message(HistoryCell::System {
-                                    content: format!("Failed to load session: {}", &session_id[..8]),
+                                    content: format!(
+                                        "Failed to load session: {}",
+                                        &session_id[..8]
+                                    ),
                                 });
                             }
                         }
@@ -2084,50 +2144,52 @@ async fn handle_view_events(app: &mut App, engine_handle: &EngineHandle, events:
                     crate::tui::session_picker::SessionPickerResult::Cancelled => {}
                 }
             }
-            ViewEvent::HistoryPickerResult { result } => {
-                match result {
-                    crate::tui::history_picker::HistoryPickerResult::Selected(text) => {
-                        app.input = text;
-                        app.cursor_position = app.input.chars().count();
-                    }
-                    crate::tui::history_picker::HistoryPickerResult::Cancelled => {}
+            ViewEvent::HistoryPickerResult { result } => match result {
+                crate::tui::history_picker::HistoryPickerResult::Selected(text) => {
+                    app.input = text;
+                    app.cursor_position = app.input.chars().count();
                 }
-            }
+                crate::tui::history_picker::HistoryPickerResult::Cancelled => {}
+            },
             ViewEvent::ModelPickerResult { result } => {
                 match result {
                     crate::tui::model_picker::ModelPickerResult::Selected(model_id) => {
                         let old_model = app.model.clone();
                         app.model = model_id.clone();
-                        
+
                         // Persist to settings
                         let mut settings = crate::settings::Settings::load().unwrap_or_default();
                         settings.default_model = Some(model_id.clone());
                         if let Err(e) = settings.save() {
                             app.add_message(HistoryCell::System {
-                                content: format!("Model changed: {old_model} → {model_id} (failed to save: {e})"),
+                                content: format!(
+                                    "Model changed: {old_model} → {model_id} (failed to save: {e})"
+                                ),
                             });
                         } else {
                             app.add_message(HistoryCell::System {
                                 content: format!("Model changed: {old_model} → {model_id} (saved)"),
                             });
                         }
-                        
+
                         // Sync with the engine
-                        let _ = engine_handle.send(Op::SyncSession {
-                            messages: app.api_messages.clone(),
-                            system_prompt: app.system_prompt.clone(),
-                            model: app.model.clone(),
-                            workspace: app.workspace.clone(),
-                        }).await;
+                        let _ = engine_handle
+                            .send(Op::SyncSession {
+                                messages: app.api_messages.clone(),
+                                system_prompt: app.system_prompt.clone(),
+                                model: app.model.clone(),
+                                workspace: app.workspace.clone(),
+                            })
+                            .await;
                     }
                     crate::tui::model_picker::ModelPickerResult::Cancelled => {}
                 }
             }
             ViewEvent::SearchResultSelected { result } => {
                 // Scroll to the selected search result
-                app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled { 
-                    cell_index: result.cell_index, 
-                    line_in_cell: 0 
+                app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled {
+                    cell_index: result.cell_index,
+                    line_in_cell: 0,
                 };
             }
         }
@@ -2482,10 +2544,7 @@ fn render_command_footer(f: &mut Frame, area: Rect, app: &App) {
     // Render suggestion if present (dim color, 💡 icon)
     if let Some(suggestion) = app.suggestion_engine.current() {
         let suggestion_text = format!("💡 {}", suggestion.display_text());
-        let span = Span::styled(
-            suggestion_text,
-            Style::default().fg(palette::TEXT_DIM),
-        );
+        let span = Span::styled(suggestion_text, Style::default().fg(palette::TEXT_DIM));
         push_footer_span(
             &mut spans,
             &mut used,
@@ -2553,7 +2612,10 @@ fn get_contextual_hint(app: &App) -> Option<String> {
         && app.input.len() > 2
     {
         let input_lower = app.input.to_lowercase();
-        let file_keywords = ["file", "read", "write", "edit", "config", "json", "toml", "yaml", "md", "rs", "py", "js", "ts"];
+        let file_keywords = [
+            "file", "read", "write", "edit", "config", "json", "toml", "yaml", "md", "rs", "py",
+            "js", "ts",
+        ];
         for keyword in &file_keywords {
             if input_lower.contains(keyword) {
                 return Some("@ for files".to_string());
@@ -2737,7 +2799,10 @@ fn handle_fuzzy_picker_key(app: &mut App, key: &KeyEvent) -> bool {
             app.fuzzy_picker.backspace();
             true
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
             app.fuzzy_picker.insert_char(c);
             true
         }

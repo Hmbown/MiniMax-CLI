@@ -36,14 +36,17 @@ pub struct ErrorHint {
 impl ErrorHint {
     /// Create a new error hint.
     #[must_use]
-    pub fn new(error_type: ErrorType, message: impl Into<String>, suggestion: impl Into<String>) -> Self {
+    pub fn new(
+        error_type: ErrorType,
+        message: impl Into<String>,
+        suggestion: impl Into<String>,
+    ) -> Self {
         Self {
             error_type,
             message: message.into(),
             suggestion: suggestion.into(),
         }
     }
-
 }
 
 impl ErrorType {
@@ -75,7 +78,7 @@ impl ErrorType {
 #[must_use]
 pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
     let error_lower = error.to_lowercase();
-    
+
     // Rate limit errors
     if error_lower.contains("429")
         || error_lower.contains("rate limit")
@@ -88,7 +91,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Wait a moment and retry, or check your quota with /usage",
         ));
     }
-    
+
     // Invalid API key errors
     if error_lower.contains("401")
         || error_lower.contains("unauthorized")
@@ -102,18 +105,16 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Run /logout to reconfigure or /setup for wizard",
         ));
     }
-    
+
     // Path escape / workspace errors (check before network since "resolve" can overlap)
-    if error_lower.contains("path escapes workspace")
-        || error_lower.contains("outside workspace")
-    {
+    if error_lower.contains("path escapes workspace") || error_lower.contains("outside workspace") {
         return Some(ErrorHint::new(
             ErrorType::PermissionDenied,
             "Path outside workspace",
             "Run /trust to enable access outside workspace, or start with --yolo flag",
         ));
     }
-    
+
     // Network errors
     if error_lower.contains("network")
         || error_lower.contains("connection")
@@ -130,7 +131,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Check your connection and try again",
         ));
     }
-    
+
     // Context too long errors
     if error_lower.contains("context")
         && (error_lower.contains("too long")
@@ -144,7 +145,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Use /compact to reduce size, or start fresh with /clear",
         ));
     }
-    
+
     // File not found errors
     if (error_lower.contains("no such file")
         || error_lower.contains("file not found")
@@ -158,7 +159,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Use @filename for file completion, or check the path",
         ));
     }
-    
+
     // Permission denied errors
     if error_lower.contains("permission denied")
         || error_lower.contains("os error 13")
@@ -171,7 +172,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "Run /trust to enable access, or start with --yolo flag",
         ));
     }
-    
+
     // Tool execution errors - pattern match for specific tool types
     if error_lower.contains("failed to execute tool")
         || error_lower.contains("tool error")
@@ -179,7 +180,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
     {
         return Some(get_tool_error_hint(&error_lower));
     }
-    
+
     // API errors (5xx)
     if error_lower.contains("500")
         || error_lower.contains("502")
@@ -195,7 +196,7 @@ pub fn get_error_hint(error: &str) -> Option<ErrorHint> {
             "The API service is experiencing issues. Wait a moment and retry",
         ));
     }
-    
+
     None
 }
 
@@ -209,7 +210,7 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
             "Shell commands require YOLO mode or explicit approval. Start with --yolo or type /yolo",
         );
     }
-    
+
     // Git errors
     if error_lower.contains("git") {
         return ErrorHint::new(
@@ -218,7 +219,7 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
             "Check that git is installed and you're in a git repository",
         );
     }
-    
+
     // File operation errors
     if error_lower.contains("read_file") || error_lower.contains("write_file") {
         return ErrorHint::new(
@@ -227,16 +228,19 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
             "Check file permissions and path. Use @ for file completion",
         );
     }
-    
+
     // Search errors
-    if error_lower.contains("search") || error_lower.contains("grep") || error_lower.contains("find") {
+    if error_lower.contains("search")
+        || error_lower.contains("grep")
+        || error_lower.contains("find")
+    {
         return ErrorHint::new(
             ErrorType::ToolExecutionError,
             "Search failed",
             "Check your search pattern syntax and try again",
         );
     }
-    
+
     // MCP tool errors
     if error_lower.contains("mcp") {
         return ErrorHint::new(
@@ -245,7 +249,7 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
             "Check your MCP configuration with /mcp status",
         );
     }
-    
+
     // Sub-agent errors
     if error_lower.contains("sub-agent") || error_lower.contains("subagent") {
         return ErrorHint::new(
@@ -254,7 +258,7 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
             "Check the agent logs or reduce the task complexity",
         );
     }
-    
+
     // Default tool error
     ErrorHint::new(
         ErrorType::ToolExecutionError,
@@ -267,12 +271,12 @@ fn get_tool_error_hint(error_lower: &str) -> ErrorHint {
 #[must_use]
 pub fn is_recoverable(error: &str) -> bool {
     let error_lower = error.to_lowercase();
-    
+
     // Rate limits are recoverable
     if error_lower.contains("rate limit") || error_lower.contains("429") {
         return true;
     }
-    
+
     // Network errors are often transient
     if error_lower.contains("timeout")
         || error_lower.contains("network")
@@ -280,27 +284,27 @@ pub fn is_recoverable(error: &str) -> bool {
     {
         return true;
     }
-    
+
     // Context too long can be fixed
     if error_lower.contains("context") && error_lower.contains("too long") {
         return true;
     }
-    
+
     // Permission errors can be fixed
     if error_lower.contains("permission") || error_lower.contains("trust") {
         return true;
     }
-    
+
     // File not found can be fixed
     if error_lower.contains("file not found") || error_lower.contains("no such file") {
         return true;
     }
-    
+
     // API key errors require user action but are recoverable
     if error_lower.contains("unauthorized") || error_lower.contains("invalid key") {
         return true;
     }
-    
+
     false
 }
 

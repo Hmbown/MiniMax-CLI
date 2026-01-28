@@ -100,7 +100,9 @@ impl HistoryPicker {
 
     /// Get the currently selected entry text (if any)
     pub fn selected_entry(&self) -> Option<String> {
-        self.matches.get(self.selected).map(|m| m.entry.text.clone())
+        self.matches
+            .get(self.selected)
+            .map(|m| m.entry.text.clone())
     }
 
     /// Handle character input for filtering
@@ -343,7 +345,11 @@ impl ModalView for HistoryPicker {
                 self.select_down();
                 ViewAction::None
             }
-            KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
                 self.insert_char(c);
                 ViewAction::None
             }
@@ -545,10 +551,7 @@ mod tests {
     #[test]
     fn test_truncate_for_preview() {
         let picker = HistoryPicker::new(&[]);
-        assert_eq!(
-            picker.truncate_for_preview("short"),
-            "short"
-        );
+        assert_eq!(picker.truncate_for_preview("short"), "short");
         let long_text = "a".repeat(PREVIEW_MAX_CHARS + 10);
         let truncated = picker.truncate_for_preview(&long_text);
         assert!(truncated.len() <= PREVIEW_MAX_CHARS + 3);

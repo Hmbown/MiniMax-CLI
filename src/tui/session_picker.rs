@@ -76,14 +76,16 @@ impl SessionPicker {
 
     /// Get the currently selected session ID (if any)
     pub fn selected_session_id(&self) -> Option<String> {
-        self.matches.get(self.selected).map(|m| m.metadata.id.clone())
+        self.matches
+            .get(self.selected)
+            .map(|m| m.metadata.id.clone())
     }
 
     /// Check if a session is the currently active one
     fn is_current_session(&self, id: &str) -> bool {
-        self.current_session_id
-            .as_ref()
-            .map_or(false, |current| current.starts_with(id) || id.starts_with(current))
+        self.current_session_id.as_ref().map_or(false, |current| {
+            current.starts_with(id) || id.starts_with(current)
+        })
     }
 
     /// Handle character input for filtering
@@ -347,7 +349,11 @@ impl ModalView for SessionPicker {
                 self.select_down();
                 ViewAction::None
             }
-            KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
                 self.insert_char(c);
                 ViewAction::None
             }
@@ -379,7 +385,11 @@ impl ModalView for SessionPicker {
         block.render(popup_area, buf);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(inner);
 
         // Query input

@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem},
 };
 
-use crate::commands::{CommandInfo, COMMANDS, commands_matching};
+use crate::commands::{COMMANDS, CommandInfo, commands_matching};
 use crate::palette;
 use crate::tui::app::AppMode;
 
@@ -94,8 +94,16 @@ impl CommandCompleter {
 
     /// Get the command name for insertion (with leading /)
     pub fn selection_for_insert(&self) -> Option<String> {
-        self.selected_command()
-            .map(|cmd| format!("/{} {}", cmd.name, cmd.usage.strip_prefix(&format!("/{}", cmd.name)).unwrap_or("").trim()))
+        self.selected_command().map(|cmd| {
+            format!(
+                "/{} {}",
+                cmd.name,
+                cmd.usage
+                    .strip_prefix(&format!("/{}", cmd.name))
+                    .unwrap_or("")
+                    .trim()
+            )
+        })
     }
 
     /// Update the query and refresh matches
@@ -162,49 +170,53 @@ impl CommandCompleter {
     /// Update matches based on current query
     fn update_matches(&mut self) {
         let mut matches = self.get_contextual_matches();
-        
+
         // Apply fuzzy filtering for better matching
         if !self.query.is_empty() {
             let query_lower = self.query.to_lowercase();
             matches = matches
                 .into_iter()
                 .filter(|m| {
-                    fuzzy_matches(m.cmd.name, &query_lower) 
+                    fuzzy_matches(m.cmd.name, &query_lower)
                         || m.cmd.aliases.iter().any(|a| fuzzy_matches(a, &query_lower))
                         || fuzzy_matches(m.cmd.description, &query_lower)
                 })
                 .collect();
         }
-        
+
         // If no matches found, try typo correction
         if matches.is_empty() && !self.query.is_empty() && self.query.len() >= 2 {
             matches = self.find_typo_corrections();
         }
-        
+
         // Sort by relevance (exact prefix matches first)
         matches.sort_by(|a, b| {
             let a_name_lower = a.cmd.name.to_lowercase();
             let b_name_lower = b.cmd.name.to_lowercase();
             let query_lower = self.query.to_lowercase();
-            
+
             let a_starts = a_name_lower.starts_with(&query_lower);
             let b_starts = b_name_lower.starts_with(&query_lower);
-            
+
             // First sort by suggestion type (normal before typo)
             match (a.suggestion_type, b.suggestion_type) {
-                (SuggestionType::Normal, SuggestionType::TypoCorrection) => std::cmp::Ordering::Less,
-                (SuggestionType::TypoCorrection, SuggestionType::Normal) => std::cmp::Ordering::Greater,
+                (SuggestionType::Normal, SuggestionType::TypoCorrection) => {
+                    std::cmp::Ordering::Less
+                }
+                (SuggestionType::TypoCorrection, SuggestionType::Normal) => {
+                    std::cmp::Ordering::Greater
+                }
                 _ => match (a_starts, b_starts) {
                     (true, false) => std::cmp::Ordering::Less,
                     (false, true) => std::cmp::Ordering::Greater,
                     _ => a.cmd.name.cmp(b.cmd.name),
-                }
+                },
             }
         });
-        
+
         matches.truncate(MAX_VISIBLE_MATCHES);
         self.matches = matches;
-        
+
         // Reset selection if out of bounds
         if self.selected >= self.matches.len() {
             self.selected = 0;
@@ -220,24 +232,27 @@ impl CommandCompleter {
                 if self.mode == AppMode::Rlm {
                     return true; // Show all commands in RLM mode
                 }
-                
+
                 // In other modes, deprioritize RLM-specific commands
                 let rlm_specific = ["status", "save-session", "save_session", "repl"];
                 if rlm_specific.contains(&cmd.name) {
                     // Still show them but they'll be sorted lower if not explicitly searched
                     return true;
                 }
-                
+
                 true
             })
-            .map(|cmd| CommandMatch { cmd, suggestion_type: SuggestionType::Normal })
+            .map(|cmd| CommandMatch {
+                cmd,
+                suggestion_type: SuggestionType::Normal,
+            })
             .collect()
     }
 
     /// Find typo corrections using edit distance
     fn find_typo_corrections(&self) -> Vec<CommandMatch> {
         let query_lower = self.query.to_lowercase();
-        
+
         COMMANDS
             .iter()
             .filter_map(|cmd| {
@@ -266,7 +281,9 @@ impl CommandCompleter {
 
     /// Check if any matches are typo corrections
     fn has_typo_corrections(&self) -> bool {
-        self.matches.iter().any(|m| m.suggestion_type == SuggestionType::TypoCorrection)
+        self.matches
+            .iter()
+            .any(|m| m.suggestion_type == SuggestionType::TypoCorrection)
     }
 }
 
@@ -281,10 +298,10 @@ fn fuzzy_matches(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    
+
     let hay_lower = haystack.to_lowercase();
     let mut hay_chars = hay_lower.chars();
-    
+
     for needle_char in needle.chars() {
         let mut found = false;
         for hay_char in hay_chars.by_ref() {
@@ -306,29 +323,33 @@ fn edit_distance(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     let a_len = a_chars.len();
     let b_len = b_chars.len();
-    
+
     if a_len == 0 {
         return b_len;
     }
     if b_len == 0 {
         return a_len;
     }
-    
+
     // Use a simple dynamic programming approach
     let mut prev_row: Vec<usize> = (0..=b_len).collect();
     let mut curr_row = vec![0; b_len + 1];
-    
+
     for i in 1..=a_len {
         curr_row[0] = i;
         for j in 1..=b_len {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             curr_row[j] = (prev_row[j] + 1)
                 .min(curr_row[j - 1] + 1)
                 .min(prev_row[j - 1] + cost);
         }
         std::mem::swap(&mut prev_row, &mut curr_row);
     }
-    
+
     prev_row[b_len]
 }
 
@@ -340,7 +361,7 @@ pub fn render(f: &mut Frame, completer: &CommandCompleter, area: Rect) {
 
     let match_count = completer.matches.len() as u16;
     let popup_height = match_count.min(MAX_VISIBLE_MATCHES as u16) + 2; // +2 for border
-    
+
     // Position below the input line
     let popup_area = Rect {
         x: area.x,
@@ -354,9 +375,17 @@ pub fn render(f: &mut Frame, completer: &CommandCompleter, area: Rect) {
 
     // Build title with "Did you mean?" indicator if applicable
     let title = if completer.has_typo_corrections() {
-        format!(" Commands ({}/{}) - Did you mean? ", completer.selected + 1, completer.match_count())
+        format!(
+            " Commands ({}/{}) - Did you mean? ",
+            completer.selected + 1,
+            completer.match_count()
+        )
     } else {
-        format!(" Commands ({}/{}) ", completer.selected + 1, completer.match_count())
+        format!(
+            " Commands ({}/{}) ",
+            completer.selected + 1,
+            completer.match_count()
+        )
     };
 
     // Draw the border
@@ -376,7 +405,7 @@ pub fn render(f: &mut Frame, completer: &CommandCompleter, area: Rect) {
         .map(|(i, m)| {
             let is_selected = i == completer.selected;
             let cmd = m.cmd;
-            
+
             // Base style
             let base_style = if is_selected {
                 Style::default()
@@ -404,7 +433,8 @@ pub fn render(f: &mut Frame, completer: &CommandCompleter, area: Rect) {
             ));
 
             // Add example usage inline
-            let usage_example = cmd.usage
+            let usage_example = cmd
+                .usage
                 .strip_prefix(&format!("/{}", cmd.name))
                 .unwrap_or("")
                 .trim();
@@ -453,12 +483,12 @@ pub fn should_trigger_completer(input: &str, cursor_pos: usize) -> bool {
     if !input.starts_with('/') {
         return false;
     }
-    
+
     // Don't trigger if there's a space (user is typing arguments)
     if input.contains(' ') {
         return false;
     }
-    
+
     // Trigger if we're at the beginning or typing after /
     cursor_pos > 0
 }
@@ -466,35 +496,39 @@ pub fn should_trigger_completer(input: &str, cursor_pos: usize) -> bool {
 /// Get a hint for a specific command prefix (e.g., "/model ")
 pub fn get_command_hint(input: &str) -> Option<&'static str> {
     let trimmed = input.trim_start();
-    
+
     if trimmed.starts_with("/model ") {
         let after_model = trimmed.strip_prefix("/model ").unwrap_or("").trim();
         if after_model.is_empty() {
-            return Some("Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash, claude-sonnet-4-20250514");
+            return Some(
+                "Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash, claude-sonnet-4-20250514",
+            );
         }
     }
-    
+
     if trimmed.starts_with("/mode ") {
         let after_mode = trimmed.strip_prefix("/mode ").unwrap_or("").trim();
         if after_mode.is_empty() {
             return Some("Options: normal, agent, yolo, rlm, duo, plan");
         }
     }
-    
+
     if trimmed.starts_with("/set ") {
         let after_set = trimmed.strip_prefix("/set ").unwrap_or("").trim();
         if after_set.is_empty() {
-            return Some("Keys: auto_compact, show_thinking, show_tool_details, theme, default_model");
+            return Some(
+                "Keys: auto_compact, show_thinking, show_tool_details, theme, default_model",
+            );
         }
     }
-    
+
     if trimmed.starts_with("/snippet ") {
         let after_snippet = trimmed.strip_prefix("/snippet ").unwrap_or("").trim();
         if after_snippet.is_empty() {
             return Some("Available: review, explain, test, doc, refactor, optimize");
         }
     }
-    
+
     None
 }
 
@@ -545,15 +579,15 @@ mod tests {
     fn test_completer_selection() {
         let mut completer = CommandCompleter::new();
         completer.activate("/he");
-        
+
         // Should have at least 'help' matching
         assert!(!completer.matches.is_empty());
-        
+
         // Test navigation
         let first = completer.selected;
         completer.select_down();
         // May wrap or stay depending on match count
-        
+
         completer.select_up();
         assert_eq!(completer.selected, first);
     }
@@ -578,10 +612,15 @@ mod tests {
     fn test_selection_for_insert() {
         let mut completer = CommandCompleter::new();
         completer.activate("/help");
-        
+
         if let Some(cmd) = completer.selected_command() {
             assert_eq!(cmd.name, "help");
-            assert!(completer.selection_for_insert().unwrap().starts_with("/help"));
+            assert!(
+                completer
+                    .selection_for_insert()
+                    .unwrap()
+                    .starts_with("/help")
+            );
         }
     }
 
@@ -601,7 +640,7 @@ mod tests {
     fn test_typo_correction() {
         let mut completer = CommandCompleter::new();
         completer.activate("/hepl"); // typo for "help"
-        
+
         // Should find "help" as a typo correction
         assert!(completer.matches.iter().any(|m| m.cmd.name == "help"));
     }
