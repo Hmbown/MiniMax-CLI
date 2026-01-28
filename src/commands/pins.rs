@@ -84,7 +84,7 @@ pub fn unpin(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     match arg.parse::<usize>() {
-        Ok(idx) if idx == 0 => CommandResult::error("Index must be 1 or greater."),
+        Ok(0) => CommandResult::error("Index must be 1 or greater."),
         Ok(idx) => {
             let zero_based = idx - 1; // Convert from 1-indexed to 0-indexed
             if app.unpin_message(zero_based) {

@@ -73,21 +73,11 @@ pub const TUTORIAL_STEPS: &[TutorialStep] = &[
 ];
 
 /// State for the interactive tutorial.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Tutorial {
     pub active: bool,
     pub current_step: usize,
     pub dont_show_again: bool,
-}
-
-impl Default for Tutorial {
-    fn default() -> Self {
-        Self {
-            active: false,
-            current_step: 0,
-            dont_show_again: false,
-        }
-    }
 }
 
 impl Tutorial {

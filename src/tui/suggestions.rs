@@ -103,10 +103,10 @@ impl DismissalTracker {
         }
 
         // Check if cooldown has expired
-        if let Some(time) = self.dismissal_times.get(id) {
-            if time.elapsed() > self.cooldown {
-                return false; // Cooldown expired, no longer dismissed
-            }
+        if let Some(time) = self.dismissal_times.get(id)
+            && time.elapsed() > self.cooldown
+        {
+            return false; // Cooldown expired, no longer dismissed
         }
 
         true
@@ -210,10 +210,10 @@ impl SuggestionEngine {
         self.dismissal_tracker.clean_expired();
 
         // Check if current suggestion should auto-hide
-        if let Some(suggestion) = &self.current {
-            if suggestion.is_expired(self.auto_hide_duration) {
-                self.current = None;
-            }
+        if let Some(suggestion) = &self.current
+            && suggestion.is_expired(self.auto_hide_duration)
+        {
+            self.current = None;
         }
     }
 
@@ -479,10 +479,10 @@ impl SuggestionEngine {
     #[allow(dead_code)]
     pub fn dismiss(&mut self, id: &str) {
         self.dismissal_tracker.dismiss(id);
-        if let Some(current) = &self.current {
-            if current.id == id {
-                self.current = None;
-            }
+        if let Some(current) = &self.current
+            && current.id == id
+        {
+            self.current = None;
         }
     }
 

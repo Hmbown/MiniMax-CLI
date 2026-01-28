@@ -77,33 +77,16 @@ pub fn doctor(app: &mut App) -> CommandResult {
 
 /// Run all diagnostic checks
 fn run_all_checks(app: &App) -> Vec<(&'static str, Vec<CheckResult>)> {
-    let mut results = Vec::new();
-
-    // API Key checks
-    results.push(("API Key", check_api_key(app)));
-
-    // Config checks
-    results.push(("Configuration", check_config()));
-
-    // Settings checks
-    results.push(("Settings", check_settings()));
-
-    // Workspace checks
-    results.push(("Workspace", check_workspace(app)));
-
-    // MCP Server checks
-    results.push(("MCP Servers", check_mcp_servers(app)));
-
-    // Session directory checks
-    results.push(("Sessions", check_sessions()));
-
-    // Skills directory checks
-    results.push(("Skills", check_skills()));
-
-    // Network connectivity
-    results.push(("Network", check_network()));
-
-    results
+    vec![
+        ("API Key", check_api_key(app)),
+        ("Configuration", check_config()),
+        ("Settings", check_settings()),
+        ("Workspace", check_workspace(app)),
+        ("MCP Servers", check_mcp_servers(app)),
+        ("Sessions", check_sessions()),
+        ("Skills", check_skills()),
+        ("Network", check_network()),
+    ]
 }
 
 /// Check API key status
@@ -147,16 +130,16 @@ fn check_api_key(_app: &App) -> Vec<CheckResult> {
                 "Verify your key at https://platform.minimax.io",
             ));
         }
-    } else if let Ok(config) = Config::load(None, None) {
-        if let Ok(key) = config.minimax_api_key() {
-            if is_valid_api_key_format(&key) {
-                results.push(CheckResult::ok("API key format is valid"));
-            } else {
-                results.push(CheckResult::warning_with_hint(
-                    "API key format looks unusual (expected: sk-api-...)",
-                    "Verify your key at https://platform.minimax.io",
-                ));
-            }
+    } else if let Ok(config) = Config::load(None, None)
+        && let Ok(key) = config.minimax_api_key()
+    {
+        if is_valid_api_key_format(&key) {
+            results.push(CheckResult::ok("API key format is valid"));
+        } else {
+            results.push(CheckResult::warning_with_hint(
+                "API key format looks unusual (expected: sk-api-...)",
+                "Verify your key at https://platform.minimax.io",
+            ));
         }
     }
 

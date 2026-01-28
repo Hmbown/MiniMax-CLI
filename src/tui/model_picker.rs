@@ -100,7 +100,7 @@ impl ModelPicker {
 
     /// Move selection down
     fn select_down(&mut self) {
-        if !AVAILABLE_MODELS.is_empty() && self.selected < AVAILABLE_MODELS.len() - 1 {
+        if self.selected < AVAILABLE_MODELS.len() - 1 {
             self.selected += 1;
         } else {
             self.selected = 0;
@@ -249,7 +249,7 @@ impl ModalView for ModelPicker {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Create a centered popup
-        let popup_width = (area.width * 3 / 5).min(70).max(50);
+        let popup_width = (area.width * 3 / 5).clamp(50, 70);
         let popup_height = (AVAILABLE_MODELS.len() as u16 * 5 + 6).min(area.height - 4);
         let popup_x = (area.width - popup_width) / 2;
         let popup_y = (area.height - popup_height) / 2;
@@ -299,7 +299,7 @@ pub fn validate_model(model_name: &str) -> Option<&'static ModelInfo> {
     AVAILABLE_MODELS.iter().find(|m| {
         m.id.eq_ignore_ascii_case(model_name)
             || m.name.eq_ignore_ascii_case(model_name)
-            || m.id.to_lowercase() == model_name.to_lowercase().replace("-", "-")
+            || m.id.to_lowercase() == model_name.to_lowercase()
     })
 }
 

@@ -986,14 +986,14 @@ impl App {
         let path = &settings.input_history_path;
 
         // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "Warning: Failed to create directory for input history: {}",
-                    e
-                );
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "Warning: Failed to create directory for input history: {}",
+                e
+            );
+            return;
         }
 
         // Build content from history, respecting the max limit

@@ -83,9 +83,9 @@ impl SessionPicker {
 
     /// Check if a session is the currently active one
     fn is_current_session(&self, id: &str) -> bool {
-        self.current_session_id.as_ref().map_or(false, |current| {
-            current.starts_with(id) || id.starts_with(current)
-        })
+        self.current_session_id
+            .as_ref()
+            .is_some_and(|current| current.starts_with(id) || id.starts_with(current))
     }
 
     /// Handle character input for filtering
@@ -367,7 +367,7 @@ impl ModalView for SessionPicker {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Create a centered popup
-        let popup_width = (area.width * 4 / 5).min(80).max(50);
+        let popup_width = (area.width * 4 / 5).clamp(50, 80);
         let popup_height = (MAX_VISIBLE_SESSIONS as u16 * 3 + 8).min(area.height - 4);
         let popup_x = (area.width - popup_width) / 2;
         let popup_y = (area.height - popup_height) / 2;
@@ -470,10 +470,10 @@ fn fuzzy_match(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
             let mut char_score: i64 = 1;
 
             // Bonus for consecutive matches
-            if let Some(prev) = prev_match_idx {
-                if hay_idx == prev + 1 {
-                    char_score += 5;
-                }
+            if let Some(prev) = prev_match_idx
+                && hay_idx == prev + 1
+            {
+                char_score += 5;
             }
 
             // Bonus for matching at word boundaries

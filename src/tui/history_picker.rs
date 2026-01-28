@@ -363,7 +363,7 @@ impl ModalView for HistoryPicker {
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Create a centered popup
-        let popup_width = (area.width * 4 / 5).min(80).max(50);
+        let popup_width = (area.width * 4 / 5).clamp(50, 80);
         let popup_height = (MAX_VISIBLE_ENTRIES as u16 * 3 + 10).min(area.height - 4);
         let popup_x = (area.width - popup_width) / 2;
         let popup_y = (area.height - popup_height) / 2;
@@ -483,10 +483,10 @@ fn fuzzy_match(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
             let mut char_score: i64 = 1;
 
             // Bonus for consecutive matches
-            if let Some(prev) = prev_match_idx {
-                if hay_idx == prev + 1 {
-                    char_score += 5;
-                }
+            if let Some(prev) = prev_match_idx
+                && hay_idx == prev + 1
+            {
+                char_score += 5;
             }
 
             // Bonus for matching at word boundaries

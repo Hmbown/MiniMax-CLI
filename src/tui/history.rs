@@ -1007,7 +1007,7 @@ fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
             }
 
             // Parse code block
-            let lang = trimmed[3..].trim().to_string();
+            let lang = trimmed.strip_prefix("```").unwrap_or("").trim().to_string();
             let mut code_lines = Vec::new();
             i += 1;
 

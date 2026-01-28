@@ -74,7 +74,7 @@ pub fn insert_snippet(_app: &mut App, name: Option<&str>) -> CommandResult {
             msg.push_str(&format!("\n\nAvailable snippets: {}", available.join(", ")));
         }
 
-        msg.push_str(&format!("\n\nUse /snippets to see all available snippets."));
+        msg.push_str("\n\nUse /snippets to see all available snippets.");
 
         CommandResult::error(msg)
     }

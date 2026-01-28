@@ -128,6 +128,23 @@ fn highlight_line(line: &str, lang: Language) -> Line<'static> {
 
             // Add the highlighted token
             let token = &remaining[start..end];
+            if token_type == TokenType::Function
+                && let Some(paren_pos) = token.find('(')
+            {
+                let name = token[..paren_pos].trim_end();
+                if !name.is_empty() {
+                    spans.push(Span::styled(name.to_string(), token_type.style()));
+                    let remainder = &token[name.len()..];
+                    if !remainder.is_empty() {
+                        spans.push(Span::styled(
+                            remainder.to_string(),
+                            TokenType::Plain.style(),
+                        ));
+                    }
+                    remaining = &remaining[end..];
+                    continue;
+                }
+            }
             spans.push(Span::styled(token.to_string(), token_type.style()));
 
             // Continue with the rest
@@ -182,22 +199,22 @@ fn get_patterns(lang: Language) -> Vec<(Regex, TokenType)> {
         patterns.push((re, TokenType::String));
     }
     // Single-quoted strings (for languages that support them)
-    if !matches!(lang, Language::Json) {
-        if let Ok(re) = Regex::new("'([^'\\\\]|\\\\.)*'") {
-            patterns.push((re, TokenType::String));
-        }
+    if !matches!(lang, Language::Json)
+        && let Ok(re) = Regex::new("'([^'\\\\]|\\\\.)*'")
+    {
+        patterns.push((re, TokenType::String));
     }
     // Backtick strings (JavaScript/TypeScript)
-    if matches!(lang, Language::JavaScript | Language::TypeScript) {
-        if let Ok(re) = Regex::new("`([^`\\\\]|\\\\.)*`") {
-            patterns.push((re, TokenType::String));
-        }
+    if matches!(lang, Language::JavaScript | Language::TypeScript)
+        && let Ok(re) = Regex::new("`([^`\\\\]|\\\\.)*`")
+    {
+        patterns.push((re, TokenType::String));
     }
     // Raw strings (Rust)
-    if matches!(lang, Language::Rust) {
-        if let Ok(re) = Regex::new("r#*\"[^\"]*\"#*") {
-            patterns.push((re, TokenType::String));
-        }
+    if matches!(lang, Language::Rust)
+        && let Ok(re) = Regex::new("r#*\"[^\"]*\"#*")
+    {
+        patterns.push((re, TokenType::String));
     }
 
     // Numbers (common pattern)
@@ -229,7 +246,7 @@ fn get_patterns(lang: Language) -> Vec<(Regex, TokenType)> {
 
     // Function calls (identifier followed by opening parenthesis)
     // This is a heuristic that works for many languages
-    if let Ok(re) = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?=\()") {
+    if let Ok(re) = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(") {
         patterns.push((re, TokenType::Function));
     }
 
@@ -790,7 +807,7 @@ mod tests {
 
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0], (false, "Some text".to_string()));
-        assert_eq!(blocks[1].0, true);
+        assert!(blocks[1].0);
         assert!(blocks[1].1.starts_with("rust\n"));
         assert_eq!(blocks[2], (false, "More text".to_string()));
     }

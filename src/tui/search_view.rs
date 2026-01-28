@@ -280,19 +280,11 @@ impl ModalView for SearchView {
                 }
             }
             KeyCode::Up => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.prev_result(total_results);
-                } else {
-                    self.prev_result(total_results);
-                }
+                self.prev_result(total_results);
                 ViewAction::None
             }
             KeyCode::Down => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.next_result(total_results);
-                } else {
-                    self.next_result(total_results);
-                }
+                self.next_result(total_results);
                 ViewAction::None
             }
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -234,10 +234,10 @@ fn confirm(prompt: &str) -> bool {
 }
 
 fn get_config_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("MINIMAX_CONFIG_PATH") {
-        if !path.trim().is_empty() {
-            return Some(PathBuf::from(path));
-        }
+    if let Ok(path) = std::env::var("MINIMAX_CONFIG_PATH")
+        && !path.trim().is_empty()
+    {
+        return Some(PathBuf::from(path));
     }
     dirs::home_dir().map(|home| home.join(".minimax").join("config.toml"))
 }

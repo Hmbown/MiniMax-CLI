@@ -176,12 +176,13 @@ pub fn yolo(app: &mut App) -> CommandResult {
     } else {
         // Toggle ON: Enable YOLO mode
         app.set_mode(AppMode::Yolo);
-        CommandResult::message(format!(
+        CommandResult::message(
             "⚠️  YOLO mode enabled - shell + trust + auto-approve!\n\n\
              WARNING: YOLO mode automatically executes tools without confirmation.\n\
              This includes file operations, shell commands, and code execution.\n\
              Use with caution!"
-        ))
+                .to_string(),
+        )
     }
 }
 

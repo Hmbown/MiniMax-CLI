@@ -72,11 +72,7 @@ impl CommandCompleter {
     pub fn activate(&mut self, input: &str) {
         self.active = true;
         // Extract query after the leading /
-        self.query = if input.len() > 1 {
-            input[1..].to_string()
-        } else {
-            String::new()
-        };
+        self.query = input.strip_prefix('/').unwrap_or("").to_string();
         self.update_matches();
     }
 
@@ -108,12 +104,8 @@ impl CommandCompleter {
 
     /// Update the query and refresh matches
     pub fn update_query(&mut self, input: &str) {
-        if input.starts_with('/') {
-            self.query = if input.len() > 1 {
-                input[1..].to_string()
-            } else {
-                String::new()
-            };
+        if let Some(stripped) = input.strip_prefix('/') {
+            self.query = stripped.to_string();
             self.update_matches();
         } else {
             self.deactivate();
@@ -174,14 +166,11 @@ impl CommandCompleter {
         // Apply fuzzy filtering for better matching
         if !self.query.is_empty() {
             let query_lower = self.query.to_lowercase();
-            matches = matches
-                .into_iter()
-                .filter(|m| {
-                    fuzzy_matches(m.cmd.name, &query_lower)
-                        || m.cmd.aliases.iter().any(|a| fuzzy_matches(a, &query_lower))
-                        || fuzzy_matches(m.cmd.description, &query_lower)
-                })
-                .collect();
+            matches.retain(|m| {
+                fuzzy_matches(m.cmd.name, &query_lower)
+                    || m.cmd.aliases.iter().any(|a| fuzzy_matches(a, &query_lower))
+                    || fuzzy_matches(m.cmd.description, &query_lower)
+            });
         }
 
         // If no matches found, try typo correction

@@ -684,7 +684,7 @@ async fn run_event_loop(
                             app.current_search_idx = Some(0);
                         }
                         // Scroll to the selected result
-                        if let Some(ref result) =
+                        if let Some(result) =
                             app.search_results.get(app.current_search_idx.unwrap_or(0))
                         {
                             // Jump to that cell in history
@@ -709,7 +709,7 @@ async fn run_event_loop(
                                 Some(app.search_results.len().saturating_sub(1));
                         }
                         // Scroll to the selected result
-                        if let Some(ref result) =
+                        if let Some(result) =
                             app.search_results.get(app.current_search_idx.unwrap_or(0))
                         {
                             app.transcript_scroll = super::scrolling::TranscriptScroll::Scrolled {
@@ -730,10 +730,8 @@ async fn run_event_loop(
             }
 
             // Handle fuzzy picker when active
-            if app.fuzzy_picker.is_active() {
-                if handle_fuzzy_picker_key(app, &key) {
-                    continue;
-                }
+            if app.fuzzy_picker.is_active() && handle_fuzzy_picker_key(app, &key) {
+                continue;
             }
 
             // Handle command completer when active
@@ -741,10 +739,9 @@ async fn run_event_loop(
                 .command_completer
                 .as_ref()
                 .is_some_and(|c| c.is_active())
+                && handle_command_completer_key(app, &key)
             {
-                if handle_command_completer_key(app, &key) {
-                    continue;
-                }
+                continue;
             }
 
             let now = Instant::now();
@@ -1146,15 +1143,15 @@ async fn run_event_loop(
                                         completer.activate(&app.input);
                                     }
                                 }
-                            } else if let Some(ref mut completer) = app.command_completer {
-                                if completer.is_active() {
-                                    completer.deactivate();
-                                }
-                            }
-                        } else if let Some(ref mut completer) = app.command_completer {
-                            if completer.is_active() {
+                            } else if let Some(ref mut completer) = app.command_completer
+                                && completer.is_active()
+                            {
                                 completer.deactivate();
                             }
+                        } else if let Some(ref mut completer) = app.command_completer
+                            && completer.is_active()
+                        {
+                            completer.deactivate();
                         }
                     }
                 }
@@ -2019,22 +2016,22 @@ fn render(f: &mut Frame, app: &mut App) {
             let mut results = Vec::new();
             let mut selected = None;
 
-            if let Some(any_view) = app.view_stack.top_as_any_mut() {
-                if let Some(search_view) = any_view.downcast_mut::<SearchView>() {
-                    results = search_view.search(&app.history);
-                    selected = if results.is_empty() {
-                        None
-                    } else {
-                        Some(search_view.selected_idx())
-                    };
+            if let Some(any_view) = app.view_stack.top_as_any_mut()
+                && let Some(search_view) = any_view.downcast_mut::<SearchView>()
+            {
+                results = search_view.search(&app.history);
+                selected = if results.is_empty() {
+                    None
+                } else {
+                    Some(search_view.selected_idx())
+                };
 
-                    // Render the search view base
-                    search_view.render(size, buf);
+                // Render the search view base
+                search_view.render(size, buf);
 
-                    // Render search results overlay
-                    render_search_results(size, buf, search_view, &results, selected);
-                    handled = true;
-                }
+                // Render search results overlay
+                render_search_results(size, buf, search_view, &results, selected);
+                handled = true;
             }
 
             if handled {
@@ -2048,15 +2045,15 @@ fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
-    if let Some(completer) = app.command_completer.as_ref() {
-        if completer.is_active() {
-            crate::tui::command_completer::render(f, completer, size);
-        }
+    if let Some(completer) = app.command_completer.as_ref()
+        && completer.is_active()
+    {
+        crate::tui::command_completer::render(f, completer, size);
     }
 
     // Render fuzzy picker overlay if active
     if app.fuzzy_picker.is_active() {
-        fuzzy_picker::render::<CrosstermBackend<Stdout>>(f, &app.fuzzy_picker, size);
+        fuzzy_picker::render(f, &app.fuzzy_picker, size);
     }
 }
 
@@ -2599,10 +2596,10 @@ fn get_contextual_hint(app: &App) -> Option<String> {
     }
 
     // Command-specific hints
-    if app.input.starts_with('/') {
-        if let Some(hint) = crate::tui::command_completer::get_command_hint(&app.input) {
-            return Some(hint.to_string());
-        }
+    if app.input.starts_with('/')
+        && let Some(hint) = crate::tui::command_completer::get_command_hint(&app.input)
+    {
+        return Some(hint.to_string());
     }
 
     // Show "@ for files" when user is typing something that looks like a file path
