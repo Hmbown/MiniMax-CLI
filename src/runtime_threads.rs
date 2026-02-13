@@ -1,6 +1,6 @@
 //! Durable thread/turn/item runtime for the HTTP API and background tasks.
 //!
-//! This module keeps DeepSeek-only execution while exposing Codex-like lifecycle
+//! This module keeps MiniMax-only execution while exposing Codex-like lifecycle
 //! semantics (threads, turns, items, interrupt/steer, and replayable events).
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1702,7 +1702,7 @@ mod tests {
     use uuid::Uuid;
 
     fn test_runtime_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("deepseek-runtime-threads-{}", Uuid::new_v4()))
+        std::env::temp_dir().join(format!("minimax-runtime-threads-{}", Uuid::new_v4()))
     }
 
     fn test_manager_config(data_dir: PathBuf) -> RuntimeThreadManagerConfig {

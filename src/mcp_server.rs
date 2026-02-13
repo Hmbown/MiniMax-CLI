@@ -300,7 +300,7 @@ fn initialize_response() -> Value {
     json!({
         "protocolVersion": "2024-11-05",
         "serverInfo": {
-            "name": "deepseek-mcp-server",
+            "name": "minimax-mcp-server",
             "version": env!("CARGO_PKG_VERSION"),
         },
         "capabilities": {

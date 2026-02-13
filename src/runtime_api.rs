@@ -807,7 +807,7 @@ mod tests {
         SharedRuntimeThreadManager,
         tokio::task::JoinHandle<()>,
     )> {
-        let root = std::env::temp_dir().join(format!("deepseek-runtime-api-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("minimax-runtime-api-{}", Uuid::new_v4()));
         let sessions_dir = root.join("sessions");
         fs::create_dir_all(&sessions_dir)?;
         let manager = TaskManager::start_with_executor(

@@ -50,7 +50,7 @@ mod tests {
     fn app() -> App {
         App::new(
             TuiOptions {
-                model: "deepseek-v3.2".to_string(),
+                model: "MiniMax-M1".to_string(),
                 workspace: PathBuf::from("."),
                 allow_shell: false,
                 max_subagents: 2,
