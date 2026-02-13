@@ -29,7 +29,7 @@ error[E0599]: no method named `todo_summary` found for reference `&App` in the c
 ### Completed Features (Ready for Integration)
 1. **Enhanced CLI branding** in `main.rs`:
    - Modes, Rlm, Duo, Coding subcommands
-   - MiniMax M2.1, Coding API, RLM, Duo mode descriptions
+   - MiniMax M2.5, Coding API, RLM, Duo mode descriptions
 
 2. **Compaction system** in `compaction.rs`:
    - `maybe_compact()` function enabled by default

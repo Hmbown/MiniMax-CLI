@@ -11,6 +11,11 @@ use serde::Deserialize;
 use crate::features::{Features, FeaturesToml, is_known_feature_key};
 use crate::hooks::HooksConfig;
 
+/// Built-in fallback text model used when config/env does not provide one.
+pub const DEFAULT_TEXT_MODEL: &str = "MiniMax-M2.5";
+/// Maximum supported concurrent subagents.
+pub const MAX_SUBAGENTS: usize = 5;
+
 // === Types ===
 
 /// Raw retry configuration loaded from config files.
@@ -43,6 +48,19 @@ pub struct DuoConfig {
     pub default_max_tokens: Option<u32>,
     pub coach_temperature: Option<f32>,
     pub player_temperature: Option<f32>,
+}
+
+/// Compaction configuration loaded from config files.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CompactionSettings {
+    pub enabled: Option<bool>,
+    pub token_threshold: Option<usize>,
+    pub message_threshold: Option<usize>,
+    pub keep_recent: Option<usize>,
+    pub model: Option<String>,
+    pub cache_summary: Option<bool>,
+    pub compact_prompt: Option<String>,
+    pub model_auto_compact_token_limit: Option<usize>,
 }
 
 /// Resolved retry policy with defaults applied.
@@ -90,6 +108,9 @@ pub struct Config {
 
     // === Duo Configuration ===
     pub duo: Option<DuoConfig>,
+
+    // === Compaction Configuration ===
+    pub compaction: Option<CompactionSettings>,
 
     // === Standard Configuration ===
     pub output_dir: Option<String>,
@@ -175,9 +196,11 @@ impl Config {
         normalize_base_url(&base)
     }
 
-    /// Return the MiniMax Anthropic-compatible base URL (normalized).
+    /// Return the MiniMax text API base URL (normalized).
+    ///
+    /// MiniMax text chat currently uses the `/anthropic` compatibility route.
     #[must_use]
-    pub fn anthropic_base_url(&self) -> String {
+    pub fn minimax_text_base_url(&self) -> String {
         let root = normalize_base_url(
             &self
                 .base_url
@@ -219,7 +242,7 @@ impl Config {
         self.default_coding_model
             .clone()
             .or_else(|| self.default_text_model.clone())
-            .unwrap_or_else(|| "MiniMax-M2.1-Coding".to_string())
+            .unwrap_or_else(|| "MiniMax-M2.5-Coding".to_string())
     }
 
     /// Check if coding API is configured with a separate key.
@@ -259,8 +282,73 @@ impl Config {
             )
     }
 
-    pub fn anthropic_api_key(&self) -> Result<String> {
+    pub fn minimax_text_api_key(&self) -> Result<String> {
         self.minimax_api_key()
+    }
+
+    /// Return whether auto-compaction should be enabled from config (if explicitly set).
+    #[must_use]
+    pub fn auto_compact_enabled(&self) -> Option<bool> {
+        self.compaction.as_ref().and_then(|cfg| cfg.enabled)
+    }
+
+    /// Resolve compaction configuration with defaults, optionally deriving a model-aware token limit.
+    #[must_use]
+    pub fn compaction_config_for_model(
+        &self,
+        active_model: &str,
+    ) -> crate::compaction::CompactionConfig {
+        let mut cfg = crate::compaction::CompactionConfig::default();
+
+        let Some(compaction) = &self.compaction else {
+            return cfg;
+        };
+
+        if let Some(enabled) = compaction.enabled {
+            cfg.enabled = enabled;
+        }
+        if let Some(message_threshold) = compaction.message_threshold {
+            cfg.message_threshold = message_threshold.max(1);
+        }
+        if let Some(keep_recent) = compaction.keep_recent {
+            cfg.keep_recent = keep_recent.max(1);
+        }
+        if let Some(cache_summary) = compaction.cache_summary {
+            cfg.cache_summary = cache_summary;
+        }
+        if let Some(model) = compaction
+            .model
+            .as_ref()
+            .map(|m| m.trim())
+            .filter(|m| !m.is_empty())
+        {
+            cfg.model = Some(model.to_string());
+        }
+        if let Some(prompt) = compaction
+            .compact_prompt
+            .as_ref()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+        {
+            cfg.compact_prompt = Some(prompt.to_string());
+        }
+
+        let model_for_limit = cfg.model.as_deref().unwrap_or(active_model);
+        let has_explicit_limit = compaction.token_threshold.is_some()
+            || compaction.model_auto_compact_token_limit.is_some();
+        cfg.derive_token_threshold_from_model = !has_explicit_limit;
+        let token_threshold = compaction
+            .token_threshold
+            .or(compaction.model_auto_compact_token_limit)
+            .or_else(|| {
+                crate::models::context_window_for_model(model_for_limit)
+                    .map(|window| ((u64::from(window) * 9) / 10) as usize)
+            });
+        if let Some(token_threshold) = token_threshold {
+            cfg.token_threshold = token_threshold.max(1);
+        }
+
+        cfg
     }
 
     /// Resolve enabled features from defaults and config entries.
@@ -563,6 +651,53 @@ fn apply_env_overrides(config: &mut Config) {
     {
         config.max_subagents = Some(parsed.clamp(1, 5));
     }
+    if let Ok(value) = std::env::var("MINIMAX_AUTO_COMPACT") {
+        let enabled = value == "1" || value.eq_ignore_ascii_case("true");
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.enabled = Some(enabled);
+    }
+    if let Ok(value) = std::env::var("MINIMAX_COMPACTION_TOKEN_THRESHOLD")
+        && let Ok(parsed) = value.parse::<usize>()
+    {
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.token_threshold = Some(parsed.max(1));
+    }
+    if let Ok(value) = std::env::var("MINIMAX_COMPACTION_MESSAGE_THRESHOLD")
+        && let Ok(parsed) = value.parse::<usize>()
+    {
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.message_threshold = Some(parsed.max(1));
+    }
+    if let Ok(value) = std::env::var("MINIMAX_COMPACTION_KEEP_RECENT")
+        && let Ok(parsed) = value.parse::<usize>()
+    {
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.keep_recent = Some(parsed.max(1));
+    }
+    if let Ok(value) = std::env::var("MINIMAX_COMPACT_PROMPT")
+        && !value.trim().is_empty()
+    {
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.compact_prompt = Some(value);
+    }
+    if let Ok(value) = std::env::var("MINIMAX_AUTO_COMPACT_TOKEN_LIMIT")
+        && let Ok(parsed) = value.parse::<usize>()
+    {
+        let compaction = config
+            .compaction
+            .get_or_insert_with(CompactionSettings::default);
+        compaction.model_auto_compact_token_limit = Some(parsed.max(1));
+    }
 }
 
 fn normalize_base_url(base: &str) -> String {
@@ -639,6 +774,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
 
         // Duo configuration
         duo: override_cfg.duo.or(base.duo),
+        compaction: override_cfg.compaction.or(base.compaction),
 
         // Standard configuration
         output_dir: override_cfg.output_dir.or(base.output_dir),
@@ -708,7 +844,7 @@ api_key = "{api_key}"
 # base_url = "https://api.minimax.io"
 
 # Default model
-default_text_model = "MiniMax-M2.1"
+default_text_model = "MiniMax-M2.5"
 "#
         )
     };

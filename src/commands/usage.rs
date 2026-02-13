@@ -26,7 +26,7 @@ pub fn usage(app: &mut App) -> CommandResult {
 
     // Media generation costs
     output.push_str("MiniMax Media Pricing (reference):\n");
-    output.push_str("  Text (M2.1):     $0.20 / 1M input tokens\n");
+    output.push_str("  Text (M2.5):     $0.20 / 1M input tokens\n");
     output.push_str("  Image gen:       $0.007 / image\n");
     output.push_str("  TTS (HD):        $0.0035 / 1K chars\n");
     output.push_str("  Video (768P):    $0.40 / 6s\n");

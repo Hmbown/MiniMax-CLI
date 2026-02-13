@@ -1,7 +1,7 @@
 //! `MiniMax` API tools: TTS, image generation, video generation, music generation, file operations
 //! plus voice management and video template generation.
 //!
-//! These tools provide access to `MiniMax` M2.1 APIs for multimodal content creation.
+//! These tools provide access to `MiniMax` APIs for multimodal content creation.
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -91,7 +91,7 @@ impl ToolSpec for TtsTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "TTS model name (default: speech-02-hd). Options: speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo",
+                    "description": "TTS model name (default: speech-02-hd). Options: speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo, speech-2.6",
                     "default": "speech-02-hd"
                 },
                 "voice_id": {
@@ -219,7 +219,7 @@ impl ToolSpec for TtsAsyncCreateTool {
             "properties": {
                 "model": {
                     "type": "string",
-                    "description": "TTS model name (default: speech-02-hd). Options: speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo",
+                    "description": "TTS model name (default: speech-02-hd). Options: speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo, speech-2.6",
                     "default": "speech-02-hd"
                 },
                 "text": {
@@ -684,7 +684,7 @@ impl ToolSpec for GenerateVideoTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Video model name (default: MiniMax-Hailuo-02). Options: MiniMax-Hailuo-02, video-01, video-01-live",
+                    "description": "Video model name (default: MiniMax-Hailuo-02). Options: MiniMax-Hailuo-02, MiniMax-Hailuo-2.3, MiniMax-Hailuo-2.3-Fast, video-01, video-01-live",
                     "default": "MiniMax-Hailuo-02"
                 },
                 "duration": {
@@ -1012,7 +1012,7 @@ impl ToolSpec for GenerateMusicTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Music model name (default: music-1.5)",
+                    "description": "Music model name (default: music-1.5). Options: music-2.5, music-2.0, music-1.5",
                     "default": "music-1.5"
                 },
                 "lyrics": {
@@ -1391,8 +1391,8 @@ impl ToolSpec for VoiceCloneTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "TTS model to use with the cloned voice (default: speech-02-hd)",
-                    "default": "speech-02-hd"
+                    "description": "TTS model to use with the cloned voice (default: speech-2.6). Options: speech-2.6, speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo",
+                    "default": "speech-2.6"
                 },
                 "language_boost_json": {
                     "type": ["string", "object"],
@@ -1426,7 +1426,7 @@ impl ToolSpec for VoiceCloneTool {
         let voice_id = optional_str(&input, "voice_id").map(std::string::ToString::to_string);
         let text = optional_str(&input, "text").map(std::string::ToString::to_string);
         let model = optional_str(&input, "model")
-            .unwrap_or("speech-02-hd")
+            .unwrap_or("speech-2.6")
             .to_string();
         let language_boost_json = optional_json_string(&input, "language_boost_json");
         let need_noise_reduction = input

@@ -315,7 +315,7 @@ impl SuggestionEngine {
                 self.set_suggestion(
                     Suggestion::new(
                         "model_suggestions",
-                        "Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash",
+                        "Available: MiniMax-M2.5, MiniMax-M2.5-lightning, MiniMax-M2.1, MiniMax-M2, MiniMax-Text-01, MiniMax-Coding-01",
                     )
                     .with_action_hint("Type model name or press Enter for picker")
                     .with_priority(SuggestionPriority::Low),

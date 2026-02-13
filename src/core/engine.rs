@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use futures_util::StreamExt;
@@ -18,8 +18,9 @@ use futures_util::stream::FuturesUnordered;
 use serde_json::json;
 use tokio::sync::{Mutex as AsyncMutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
-use crate::client::AnthropicClient;
+use crate::client::MiniMaxTextClient;
 use crate::compaction::{CompactionConfig, compact_messages, maybe_compact, merge_system_prompts};
 use crate::config::Config;
 use crate::duo::{DuoSession, SharedDuoSession, session_summary as duo_session_summary};
@@ -33,15 +34,19 @@ use crate::models::{
 use crate::prompts;
 use crate::rlm::{RlmSession, SharedRlmSession, session_summary as rlm_session_summary};
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
+use crate::tools::shell::restore_shell_state_for_workspace;
 use crate::tools::spec::{ApprovalRequirement, ToolError, ToolResult};
 use crate::tools::subagent::{
-    SharedSubAgentManager, SubAgentRuntime, SubAgentType, new_shared_subagent_manager,
+    SharedSubAgentManager, SubAgentRuntime, SubAgentStatus, SubAgentType,
+    new_shared_subagent_manager, restore_subagent_state,
 };
 use crate::tools::todo::{SharedTodoList, new_shared_todo_list};
+use crate::tools::user_input::{UserInputAnswer, UserInputRequest, UserInputResponse};
 use crate::tools::{ToolContext, ToolRegistryBuilder};
 use crate::tui::app::AppMode;
 
 use super::events::Event;
+use super::events::TurnOutcomeStatus;
 use super::ops::Op;
 use super::session::Session;
 use super::tool_parser;
@@ -86,12 +91,14 @@ pub struct EngineConfig {
     pub cache_tools: bool,
     /// Enable automatic context compaction when thresholds are exceeded.
     pub auto_compact: bool,
+    /// Compaction thresholds and prompt tuning.
+    pub compaction: CompactionConfig,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            model: "MiniMax-M2.1".to_string(),
+            model: "MiniMax-M2.5".to_string(),
             workspace: PathBuf::from("."),
             allow_shell: false,
             trust_mode: false,
@@ -108,6 +115,7 @@ impl Default for EngineConfig {
             cache_system: true,  // Enable by default
             cache_tools: true,   // Enable by default
             auto_compact: false, // Disabled by default
+            compaction: CompactionConfig::default(),
         }
     }
 }
@@ -151,6 +159,16 @@ impl EngineHandle {
         Ok(())
     }
 
+    /// Steer the current turn with additional guidance.
+    pub async fn steer(&self, prompt: impl Into<String>) -> Result<()> {
+        self.tx_op
+            .send(Op::Steer {
+                content: prompt.into(),
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Deny a pending tool call
     pub async fn deny_tool_call(&self, id: impl Into<String>) -> Result<()> {
         self.tx_approval
@@ -165,8 +183,8 @@ impl EngineHandle {
 /// The core engine that processes operations and emits events
 pub struct Engine {
     config: EngineConfig,
-    anthropic_client: Option<AnthropicClient>,
-    anthropic_client_error: Option<String>,
+    minimax_text_client: Option<MiniMaxTextClient>,
+    minimax_text_client_error: Option<String>,
     session: Session,
     subagent_manager: SharedSubAgentManager,
     mcp_pool: Option<Arc<AsyncMutex<McpPool>>>,
@@ -198,6 +216,15 @@ struct ToolUseState {
     name: String,
     input: serde_json::Value,
     input_buffer: String,
+}
+
+fn describe_subagent_status(status: &SubAgentStatus) -> String {
+    match status {
+        SubAgentStatus::Running => "running".to_string(),
+        SubAgentStatus::Completed => "completed".to_string(),
+        SubAgentStatus::Cancelled => "cancelled".to_string(),
+        SubAgentStatus::Failed(err) => format!("failed: {err}"),
+    }
 }
 
 struct ToolExecOutcome {
@@ -340,10 +367,11 @@ impl Engine {
         let tool_exec_lock = Arc::new(RwLock::new(()));
 
         // Create clients for both providers
-        let (anthropic_client, anthropic_client_error) = match AnthropicClient::new(api_config) {
-            Ok(client) => (Some(client), None),
-            Err(err) => (None, Some(err.to_string())),
-        };
+        let (minimax_text_client, minimax_text_client_error) =
+            match MiniMaxTextClient::new(api_config) {
+                Ok(client) => (Some(client), None),
+                Err(err) => (None, Some(err.to_string())),
+            };
 
         let mut session = Session::new(
             config.model.clone(),
@@ -368,8 +396,8 @@ impl Engine {
 
         let engine = Engine {
             config,
-            anthropic_client,
-            anthropic_client_error,
+            minimax_text_client,
+            minimax_text_client_error,
             session,
             subagent_manager,
             mcp_pool: None,
@@ -390,9 +418,36 @@ impl Engine {
         (engine, handle)
     }
 
+    async fn restore_runtime_state(&mut self, force_reload: bool, source: &str) {
+        let shell_report = restore_shell_state_for_workspace(&self.session.workspace, force_reload);
+        let subagent_report = restore_subagent_state(&self.subagent_manager, force_reload);
+
+        let summary = format!(
+            "Restored runtime state ({source}): jobs={} (orphaned {}), subagents={} (interrupted {})",
+            shell_report.restored_jobs,
+            shell_report.orphaned_jobs,
+            subagent_report.restored_agents,
+            subagent_report.interrupted_agents
+        );
+        let _ = self.tx_event.send(Event::status(summary)).await;
+
+        for warning in shell_report
+            .warnings
+            .into_iter()
+            .chain(subagent_report.warnings.into_iter())
+        {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!("Runtime state warning: {warning}")))
+                .await;
+        }
+    }
+
     /// Run the engine event loop
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) {
+        self.restore_runtime_state(true, "startup").await;
+
         while let Some(op) = self.rx_op.recv().await {
             match op {
                 Op::SendMessage {
@@ -403,6 +458,15 @@ impl Engine {
                     trust_mode,
                 } => {
                     self.handle_send_message(content, mode, model, allow_shell, trust_mode)
+                        .await;
+                }
+                Op::Steer { content } => {
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Steer hint received: {}",
+                            content.trim()
+                        )))
                         .await;
                 }
                 Op::CancelRequest => {
@@ -424,9 +488,9 @@ impl Engine {
                         .await;
                 }
                 Op::SpawnSubAgent { prompt } => {
-                    let Some(client) = self.anthropic_client.clone() else {
+                    let Some(client) = self.minimax_text_client.clone() else {
                         let message = self
-                            .anthropic_client_error
+                            .minimax_text_client_error
                             .as_deref()
                             .map(|err| format!("Failed to spawn sub-agent: {err}"))
                             .unwrap_or_else(|| {
@@ -483,7 +547,10 @@ impl Engine {
                     let result = self
                         .subagent_manager
                         .lock()
-                        .map(|manager| manager.list())
+                        .map(|mut manager| {
+                            let _ = manager.ensure_state_loaded();
+                            manager.list()
+                        })
                         .map_err(|_| anyhow::anyhow!("Failed to lock sub-agent manager"));
 
                     match result {
@@ -495,6 +562,138 @@ impl Engine {
                                 .tx_event
                                 .send(Event::error(
                                     format!("Failed to list sub-agents: {err}"),
+                                    true,
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                Op::GetSubAgent {
+                    agent_id,
+                    block,
+                    timeout_ms,
+                } => {
+                    let timeout_ms = timeout_ms.clamp(1_000, 600_000);
+                    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                    loop {
+                        let snapshot = self
+                            .subagent_manager
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("Failed to lock sub-agent manager"))
+                            .and_then(|mut manager| {
+                                let _ = manager.ensure_state_loaded();
+                                manager.get_result(&agent_id)
+                            });
+
+                        match snapshot {
+                            Ok(snapshot) => {
+                                let is_running = snapshot.status == SubAgentStatus::Running;
+                                if !block || !is_running || Instant::now() >= deadline {
+                                    let status = describe_subagent_status(&snapshot.status);
+                                    let _ = self
+                                        .tx_event
+                                        .send(Event::status(format!(
+                                            "Sub-agent {}: {}",
+                                            snapshot.agent_id, status
+                                        )))
+                                        .await;
+                                    let _ = self
+                                        .tx_event
+                                        .send(Event::AgentList {
+                                            agents: vec![snapshot],
+                                        })
+                                        .await;
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                let _ = self
+                                    .tx_event
+                                    .send(Event::error(
+                                        format!("Failed to fetch sub-agent: {err}"),
+                                        true,
+                                    ))
+                                    .await;
+                                break;
+                            }
+                        }
+
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                }
+                Op::CancelSubAgent { agent_id } => {
+                    let result = self
+                        .subagent_manager
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Failed to lock sub-agent manager"))
+                        .and_then(|mut manager| {
+                            let _ = manager.ensure_state_loaded();
+                            manager.cancel(&agent_id)
+                        });
+
+                    match result {
+                        Ok(snapshot) => {
+                            let status = describe_subagent_status(&snapshot.status);
+                            let _ = self
+                                .tx_event
+                                .send(Event::status(format!(
+                                    "Sub-agent {}: {}",
+                                    snapshot.agent_id, status
+                                )))
+                                .await;
+                            let _ = self
+                                .tx_event
+                                .send(Event::AgentList {
+                                    agents: vec![snapshot],
+                                })
+                                .await;
+                        }
+                        Err(err) => {
+                            let _ = self
+                                .tx_event
+                                .send(Event::error(
+                                    format!("Failed to cancel sub-agent: {err}"),
+                                    true,
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                Op::CleanSubAgents { max_age_ms } => {
+                    let max_age = Duration::from_millis(max_age_ms.min(86_400_000));
+                    let result = self
+                        .subagent_manager
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Failed to lock sub-agent manager"))
+                        .map(|mut manager| {
+                            let _ = manager.ensure_state_loaded();
+                            let before = manager.list();
+                            manager.cleanup(max_age);
+                            let after = manager.list();
+                            let removed = before.len().saturating_sub(after.len());
+                            (removed, after)
+                        });
+
+                    match result {
+                        Ok((removed, remaining)) => {
+                            let _ = self
+                                .tx_event
+                                .send(Event::status(format!(
+                                    "Cleaned sub-agents. Removed: {}. Remaining: {}.",
+                                    removed,
+                                    remaining.len()
+                                )))
+                                .await;
+                            let _ = self
+                                .tx_event
+                                .send(Event::AgentList { agents: remaining })
+                                .await;
+                        }
+                        Err(err) => {
+                            let _ = self
+                                .tx_event
+                                .send(Event::error(
+                                    format!("Failed to clean sub-agents: {err}"),
                                     true,
                                 ))
                                 .await;
@@ -524,6 +723,7 @@ impl Engine {
                     model,
                     workspace,
                 } => {
+                    let workspace_changed = self.session.workspace != workspace;
                     self.session.messages = messages;
                     self.session.system_prompt = system_prompt;
                     self.session.model = model;
@@ -536,17 +736,28 @@ impl Engine {
                     } else {
                         None
                     };
+                    if workspace_changed {
+                        self.subagent_manager = new_shared_subagent_manager(
+                            workspace.clone(),
+                            self.config.max_subagents,
+                        );
+                    }
+                    self.restore_runtime_state(workspace_changed, "session sync")
+                        .await;
                     let _ = self
                         .tx_event
                         .send(Event::status("Session context synced".to_string()))
                         .await;
                 }
+                Op::ReloadRuntimeState => {
+                    self.restore_runtime_state(true, "reload").await;
+                }
                 Op::Shutdown => {
                     break;
                 }
                 Op::CompactContext => {
-                    let Some(client) = self.anthropic_client.clone() else {
-                        let message = self.anthropic_client_error.as_deref().map_or_else(
+                    let Some(client) = self.minimax_text_client.clone() else {
+                        let message = self.minimax_text_client_error.as_deref().map_or_else(
                             || "Cannot compact context: API client not configured".to_string(),
                             |err| format!("Cannot compact context: {err}"),
                         );
@@ -556,9 +767,8 @@ impl Engine {
 
                     // Manual compaction should force a summary when possible.
                     let config = CompactionConfig {
-                        model: self.session.model.clone(),
                         keep_recent: 4,
-                        ..CompactionConfig::default()
+                        ..self.config.compaction.clone()
                     };
 
                     if self.session.messages.len() <= config.keep_recent {
@@ -571,7 +781,24 @@ impl Engine {
                         continue;
                     }
 
-                    match compact_messages(&client, &self.session.messages, &config).await {
+                    let compaction_id = format!("cmp_{}", &Uuid::new_v4().to_string()[..8]);
+                    let _ = self
+                        .tx_event
+                        .send(Event::CompactionStarted {
+                            id: compaction_id.clone(),
+                            auto: false,
+                            message: "Manual context compaction started".to_string(),
+                        })
+                        .await;
+
+                    match compact_messages(
+                        &client,
+                        &self.session.messages,
+                        &config,
+                        &self.session.model,
+                    )
+                    .await
+                    {
                         Ok((messages, summary_prompt)) => {
                             let merged_system = merge_system_prompts(
                                 self.session.system_prompt.as_ref(),
@@ -593,6 +820,14 @@ impl Engine {
                                 .tx_event
                                 .send(Event::status("Context compacted successfully".to_string()))
                                 .await;
+                            let _ = self
+                                .tx_event
+                                .send(Event::CompactionCompleted {
+                                    id: compaction_id,
+                                    auto: false,
+                                    message: "Context compacted successfully".to_string(),
+                                })
+                                .await;
                         }
                         Err(err) => {
                             let _ = self
@@ -602,8 +837,29 @@ impl Engine {
                                     false,
                                 ))
                                 .await;
+                            let _ = self
+                                .tx_event
+                                .send(Event::CompactionFailed {
+                                    id: compaction_id,
+                                    auto: false,
+                                    message: format!("Failed to compact context: {err}"),
+                                })
+                                .await;
                         }
                     }
+                }
+                Op::SetAutoCompact { enabled } => {
+                    self.config.auto_compact = enabled;
+                    let _ = self
+                        .tx_event
+                        .send(Event::status(format!(
+                            "Auto-compaction {}",
+                            if enabled { "enabled" } else { "disabled" }
+                        )))
+                        .await;
+                }
+                Op::SetCompactionConfig { config } => {
+                    self.config.compaction = config;
                 }
             }
         }
@@ -627,9 +883,9 @@ impl Engine {
         let _ = self.tx_event.send(Event::TurnStarted).await;
 
         // Check if we have the appropriate client
-        if self.anthropic_client.is_none() {
+        if self.minimax_text_client.is_none() {
             let message = self
-                .anthropic_client_error
+                .minimax_text_client_error
                 .as_deref()
                 .map(|err| format!("Failed to send message: {err}"))
                 .unwrap_or_else(|| "Failed to send message: API client not configured".to_string());
@@ -694,6 +950,7 @@ impl Engine {
             .with_search_tools()
             .with_todo_tool(todo_list.clone())
             .with_plan_tool(plan_state.clone())
+            .with_runtime_automation_tools()
             .with_minimax_tools()
             .with_git_tools()
             .with_artifact_tools()
@@ -710,7 +967,7 @@ impl Engine {
             builder = builder.with_shell_tools();
         }
 
-        let runtime = if let Some(client) = self.anthropic_client.clone() {
+        let runtime = if let Some(client) = self.minimax_text_client.clone() {
             Some(SubAgentRuntime::new(
                 client,
                 self.session.model.clone(),
@@ -731,7 +988,7 @@ impl Engine {
             if self.config.features.enabled(Feature::Rlm) {
                 builder = builder.with_rlm_tools(
                     self.config.rlm_session.clone(),
-                    self.anthropic_client.clone(),
+                    self.minimax_text_client.clone(),
                     self.session.model.clone(),
                 );
             } else {
@@ -755,7 +1012,7 @@ impl Engine {
         let tool_registry = match mode {
             AppMode::Agent | AppMode::Yolo | AppMode::Rlm | AppMode::Duo => {
                 if self.config.features.enabled(Feature::Subagents) {
-                    let runtime = if let Some(client) = self.anthropic_client.clone() {
+                    let runtime = if let Some(client) = self.minimax_text_client.clone() {
                         Some(SubAgentRuntime::new(
                             client,
                             self.session.model.clone(),
@@ -793,16 +1050,25 @@ impl Engine {
         });
 
         // Main turn loop
-        self.handle_anthropic_turn(&mut turn, tool_registry.as_ref(), tools, mode)
+        self.handle_minimax_text_turn(&mut turn, tool_registry.as_ref(), tools, mode)
             .await;
 
         // Update session usage
         self.session.total_usage.add(&turn.usage);
 
         // Emit turn complete event
+        let status = if self.cancel_token.is_cancelled() {
+            TurnOutcomeStatus::Interrupted
+        } else {
+            TurnOutcomeStatus::Completed
+        };
         let _ = self
             .tx_event
-            .send(Event::TurnComplete { usage: turn.usage })
+            .send(Event::TurnComplete {
+                usage: turn.usage,
+                status,
+                error: None,
+            })
             .await;
     }
 
@@ -893,7 +1159,95 @@ impl Engine {
             let _ = tx_event.send(Event::PauseEvents).await;
         }
 
-        let result = if McpPool::is_mcp_tool(&tool_name) {
+        let result = if tool_name == "request_user_input" {
+            let request = UserInputRequest::from_value(&tool_input)?;
+            let answers = request
+                .questions
+                .into_iter()
+                .map(|q| {
+                    let option = q.options.first().ok_or_else(|| {
+                        ToolError::invalid_input(
+                            "request_user_input.questions.options cannot be empty",
+                        )
+                    })?;
+                    Ok(UserInputAnswer {
+                        id: q.id,
+                        label: option.label.clone(),
+                        value: option.label.clone(),
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, ToolError>>()?;
+            let payload = serde_json::to_string(&UserInputResponse { answers }).map_err(|e| {
+                ToolError::execution_failed(format!(
+                    "Failed to encode request_user_input response: {e}"
+                ))
+            })?;
+            Ok(ToolResult::success(payload))
+        } else if tool_name == "multi_tool_use.parallel" {
+            let tool_uses = tool_input
+                .get("tool_uses")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    ToolError::invalid_input("multi_tool_use.parallel requires tool_uses[]")
+                })?;
+            let mut outputs = Vec::with_capacity(tool_uses.len());
+            for tool_use in tool_uses {
+                let raw_name = tool_use
+                    .get("recipient_name")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        ToolError::invalid_input("tool_uses[].recipient_name is required")
+                    })?;
+                let mapped = raw_name.strip_prefix("functions.").unwrap_or(raw_name);
+                if mapped == "multi_tool_use.parallel" {
+                    outputs.push(json!({
+                        "recipient_name": raw_name,
+                        "ok": false,
+                        "error": "multi_tool_use.parallel cannot recursively call itself"
+                    }));
+                    continue;
+                }
+                let params = tool_use
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let result = if McpPool::is_mcp_tool(mapped) {
+                    if let Some(pool) = mcp_pool.as_ref() {
+                        Engine::execute_mcp_tool_with_pool(pool.clone(), mapped, params).await
+                    } else {
+                        Err(ToolError::not_available(format!(
+                            "tool '{mapped}' is not registered"
+                        )))
+                    }
+                } else if let Some(registry) = registry {
+                    registry.execute_full(mapped, params).await
+                } else {
+                    Err(ToolError::not_available(format!(
+                        "tool '{mapped}' is not registered"
+                    )))
+                };
+                match result {
+                    Ok(tool_result) => outputs.push(json!({
+                        "recipient_name": raw_name,
+                        "ok": true,
+                        "content": tool_result.content,
+                        "metadata": tool_result.metadata
+                    })),
+                    Err(err) => outputs.push(json!({
+                        "recipient_name": raw_name,
+                        "ok": false,
+                        "error": err.to_string()
+                    })),
+                }
+            }
+            let payload =
+                serde_json::to_string(&json!({ "tool_results": outputs })).map_err(|e| {
+                    ToolError::execution_failed(format!(
+                        "Failed to encode multi_tool_use.parallel response: {e}"
+                    ))
+                })?;
+            Ok(ToolResult::success(payload))
+        } else if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
                 Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
             } else {
@@ -983,9 +1337,9 @@ impl Engine {
         Some(tools)
     }
 
-    /// Handle a turn using the Anthropic API (original implementation)
+    /// Handle a turn using the MiniMax text API.
     #[allow(clippy::too_many_lines)]
-    async fn handle_anthropic_turn(
+    async fn handle_minimax_text_turn(
         &mut self,
         turn: &mut TurnContext,
         tool_registry: Option<&crate::tools::ToolRegistry>,
@@ -993,9 +1347,9 @@ impl Engine {
         _mode: AppMode,
     ) {
         let client = self
-            .anthropic_client
+            .minimax_text_client
             .clone()
-            .expect("anthropic client should be configured");
+            .expect("MiniMax text client should be configured");
 
         loop {
             if self.cancel_token.is_cancelled() {
@@ -1014,13 +1368,20 @@ impl Engine {
             // Check for context compaction (if conversation is getting long)
             // Only compact if auto_compact is enabled in config
             let (messages_for_request, system_for_request) = if self.config.auto_compact {
-                let compaction_config = CompactionConfig::default();
+                let mut compaction_config = self.config.compaction.clone();
+                if compaction_config.derive_token_threshold_from_model
+                    && let Some(window) =
+                        crate::models::context_window_for_model(&self.session.model)
+                {
+                    compaction_config.token_threshold = ((u64::from(window) * 9) / 10) as usize;
+                }
                 match maybe_compact(
                     &client,
                     &self.session.messages,
                     &self.session.system_prompt,
                     &tools,
                     &compaction_config,
+                    &self.session.model,
                 )
                 .await
                 {
@@ -1572,4 +1933,32 @@ pub fn spawn_engine(config: EngineConfig, api_config: &Config) -> EngineHandle {
     });
 
     handle
+}
+
+#[cfg(test)]
+pub struct MockEngineHandle {
+    pub handle: EngineHandle,
+    pub rx_op: mpsc::Receiver<Op>,
+    pub tx_event: mpsc::Sender<Event>,
+    pub cancel_token: CancellationToken,
+}
+
+#[cfg(test)]
+pub fn mock_engine_handle() -> MockEngineHandle {
+    let (tx_op, rx_op) = mpsc::channel(64);
+    let (tx_event, rx_event) = mpsc::channel(256);
+    let (tx_approval, _rx_approval) = mpsc::channel(32);
+    let cancel_token = CancellationToken::new();
+    let handle = EngineHandle {
+        tx_op,
+        rx_event: Arc::new(RwLock::new(rx_event)),
+        cancel_token: cancel_token.clone(),
+        tx_approval,
+    };
+    MockEngineHandle {
+        handle,
+        rx_op,
+        tx_event,
+        cancel_token,
+    }
 }

@@ -9,13 +9,15 @@
 //! - Streaming output (future)
 
 use anyhow::{Context, Result, anyhow};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
@@ -40,6 +42,7 @@ pub enum ShellStatus {
     Failed,
     Killed,
     TimedOut,
+    Orphaned,
 }
 
 /// Result from a shell command execution
@@ -72,6 +75,8 @@ pub struct BackgroundShell {
     pub stdout: String,
     pub stderr: String,
     pub started_at: Instant,
+    pub started_at_utc: DateTime<Utc>,
+    pub updated_at_utc: DateTime<Utc>,
     pub sandbox_type: SandboxType,
     child: Option<Child>,
     stdout_thread: Option<std::thread::JoinHandle<Vec<u8>>>,
@@ -95,11 +100,13 @@ impl BackgroundShell {
                         ShellStatus::Failed
                     };
                     self.collect_output();
+                    self.updated_at_utc = Utc::now();
                     true
                 }
                 Ok(None) => false, // Still running
                 Err(_) => {
                     self.status = ShellStatus::Failed;
+                    self.updated_at_utc = Utc::now();
                     true
                 }
             }
@@ -129,6 +136,7 @@ impl BackgroundShell {
             let _ = child.wait(); // Reap the zombie
             self.status = ShellStatus::Killed;
             self.collect_output();
+            self.updated_at_utc = Utc::now();
         }
         Ok(())
     }
@@ -154,12 +162,62 @@ impl BackgroundShell {
     }
 }
 
+const SHELL_STATE_FILE_NAME: &str = "background_jobs.json";
+const SHELL_STATE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedShellState {
+    version: u32,
+    tasks: Vec<PersistedShellTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedShellTask {
+    id: String,
+    command: String,
+    working_dir: PathBuf,
+    status: ShellStatus,
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    started_at_unix_ms: i64,
+    updated_at_unix_ms: i64,
+    sandbox_type: String,
+    pid: Option<u32>,
+}
+
+impl PersistedShellTask {
+    fn from_background(shell: &BackgroundShell) -> Self {
+        Self {
+            id: shell.id.clone(),
+            command: shell.command.clone(),
+            working_dir: shell.working_dir.clone(),
+            status: shell.status.clone(),
+            exit_code: shell.exit_code,
+            stdout: shell.stdout.clone(),
+            stderr: shell.stderr.clone(),
+            started_at_unix_ms: shell.started_at_utc.timestamp_millis(),
+            updated_at_unix_ms: shell.updated_at_utc.timestamp_millis(),
+            sandbox_type: shell.sandbox_type.to_string(),
+            pid: shell.child.as_ref().map(std::process::Child::id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellRestoreReport {
+    pub restored_jobs: usize,
+    pub orphaned_jobs: usize,
+    pub warnings: Vec<String>,
+}
+
 /// Manages background shell processes with optional sandboxing.
 pub struct ShellManager {
     processes: HashMap<String, BackgroundShell>,
     default_workspace: PathBuf,
     sandbox_manager: SandboxManager,
     sandbox_policy: ExecutionSandboxPolicy,
+    state_loaded: bool,
 }
 
 impl ShellManager {
@@ -170,6 +228,7 @@ impl ShellManager {
             default_workspace: workspace,
             sandbox_manager: SandboxManager::new(),
             sandbox_policy: ExecutionSandboxPolicy::default(),
+            state_loaded: false,
         }
     }
 
@@ -180,6 +239,7 @@ impl ShellManager {
             default_workspace: workspace,
             sandbox_manager: SandboxManager::new(),
             sandbox_policy: policy,
+            state_loaded: false,
         }
     }
 
@@ -196,6 +256,136 @@ impl ShellManager {
     /// Check if sandboxing is available on this platform.
     pub fn is_sandbox_available(&mut self) -> bool {
         self.sandbox_manager.is_available()
+    }
+
+    fn state_file_path(&self) -> PathBuf {
+        self.default_workspace
+            .join(".minimax")
+            .join("state")
+            .join(SHELL_STATE_FILE_NAME)
+    }
+
+    fn save_state(&self) -> Result<()> {
+        let state_path = self.state_file_path();
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create {}", parent.display()))?;
+        }
+
+        let state = PersistedShellState {
+            version: SHELL_STATE_VERSION,
+            tasks: self
+                .processes
+                .values()
+                .map(PersistedShellTask::from_background)
+                .collect(),
+        };
+        let content = serde_json::to_string_pretty(&state)
+            .with_context(|| format!("Failed to serialize {}", state_path.display()))?;
+        fs::write(&state_path, content)
+            .with_context(|| format!("Failed to write {}", state_path.display()))?;
+        Ok(())
+    }
+
+    fn save_state_soft(&self) {
+        if let Err(err) = self.save_state() {
+            eprintln!("Warning: failed to persist shell state: {err}");
+        }
+    }
+
+    pub fn ensure_state_loaded(&mut self) -> ShellRestoreReport {
+        if self.state_loaded {
+            ShellRestoreReport::default()
+        } else {
+            self.load_state()
+        }
+    }
+
+    pub fn reload_state(&mut self) -> ShellRestoreReport {
+        self.state_loaded = false;
+        self.load_state()
+    }
+
+    fn load_state(&mut self) -> ShellRestoreReport {
+        self.state_loaded = true;
+        let mut report = ShellRestoreReport::default();
+        let state_path = self.state_file_path();
+        let content = match fs::read_to_string(&state_path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return report,
+            Err(err) => {
+                report.warnings.push(format!(
+                    "Failed to read shell state {}: {err}",
+                    state_path.display()
+                ));
+                return report;
+            }
+        };
+
+        let persisted = match serde_json::from_str::<PersistedShellState>(&content) {
+            Ok(persisted) => persisted,
+            Err(err) => {
+                report.warnings.push(format!(
+                    "Failed to parse shell state {}: {err}",
+                    state_path.display()
+                ));
+                return report;
+            }
+        };
+
+        for task in persisted.tasks {
+            if self.processes.contains_key(&task.id) {
+                continue;
+            }
+
+            let mut status = task.status;
+            let mut stderr = task.stderr;
+            if status == ShellStatus::Running {
+                let reason = match task.pid {
+                    Some(pid) if is_process_alive(pid) => format!(
+                        "orphaned: process {pid} is still running but cannot be reattached after restart"
+                    ),
+                    Some(pid) => {
+                        format!("orphaned: process {pid} was no longer alive during restore")
+                    }
+                    None => "orphaned: running task had no recorded pid during restore".to_string(),
+                };
+                status = ShellStatus::Orphaned;
+                if stderr.trim().is_empty() {
+                    stderr = reason;
+                } else {
+                    stderr = format!("{stderr}\n{reason}");
+                }
+                report.orphaned_jobs += 1;
+            }
+
+            let started_at_utc = datetime_from_unix_millis(task.started_at_unix_ms);
+            let updated_at_utc = datetime_from_unix_millis(task.updated_at_unix_ms);
+            let bg_shell = BackgroundShell {
+                id: task.id.clone(),
+                command: task.command,
+                working_dir: task.working_dir,
+                status,
+                exit_code: task.exit_code,
+                stdout: task.stdout,
+                stderr,
+                started_at: instant_from_unix_ms(task.started_at_unix_ms),
+                started_at_utc,
+                updated_at_utc,
+                sandbox_type: sandbox_type_from_string(&task.sandbox_type),
+                child: None,
+                stdout_thread: None,
+                stderr_thread: None,
+            };
+            self.processes.insert(task.id, bg_shell);
+            report.restored_jobs += 1;
+        }
+
+        if report.restored_jobs > 0 || report.orphaned_jobs > 0 {
+            self.save_state_soft();
+        }
+
+        report
     }
 
     /// Execute a shell command with the configured sandbox policy.
@@ -452,6 +642,7 @@ impl ShellManager {
     ) -> Result<ShellResult> {
         let task_id = format!("shell_{}", &Uuid::new_v4().to_string()[..8]);
         let started = Instant::now();
+        let started_utc = Utc::now();
         let sandbox_type = exec_env.sandbox_type;
         let sandboxed = exec_env.is_sandboxed();
 
@@ -505,6 +696,8 @@ impl ShellManager {
             stdout: String::new(),
             stderr: String::new(),
             started_at: started,
+            started_at_utc: started_utc,
+            updated_at_utc: started_utc,
             sandbox_type,
             child: Some(child),
             stdout_thread,
@@ -512,6 +705,7 @@ impl ShellManager {
         };
 
         self.processes.insert(task_id.clone(), bg_shell);
+        self.save_state_soft();
 
         Ok(ShellResult {
             task_id: Some(task_id),
@@ -561,7 +755,9 @@ impl ShellManager {
             shell.poll();
         }
 
-        Ok(shell.snapshot())
+        let snapshot = shell.snapshot();
+        self.save_state_soft();
+        Ok(snapshot)
     }
 
     /// Kill a running background process
@@ -572,7 +768,9 @@ impl ShellManager {
             .ok_or_else(|| anyhow!("Task {task_id} not found"))?;
 
         shell.kill()?;
-        Ok(shell.snapshot())
+        let snapshot = shell.snapshot();
+        self.save_state_soft();
+        Ok(snapshot)
     }
 
     /// List all background processes
@@ -581,6 +779,7 @@ impl ShellManager {
         for shell in self.processes.values_mut() {
             shell.poll();
         }
+        self.save_state_soft();
 
         self.processes
             .values()
@@ -598,7 +797,49 @@ impl ShellManager {
                 shell.started_at.elapsed() < max_age
             }
         });
+        self.save_state_soft();
     }
+}
+
+fn instant_from_unix_ms(timestamp_ms: i64) -> Instant {
+    let timestamp_ms = u64::try_from(timestamp_ms).unwrap_or(0);
+    let then = UNIX_EPOCH + Duration::from_millis(timestamp_ms);
+    let elapsed = SystemTime::now()
+        .duration_since(then)
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    Instant::now()
+        .checked_sub(elapsed)
+        .unwrap_or_else(Instant::now)
+}
+
+fn datetime_from_unix_millis(timestamp_ms: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms).unwrap_or_else(Utc::now)
+}
+
+fn sandbox_type_from_string(value: &str) -> SandboxType {
+    match value {
+        #[cfg(target_os = "macos")]
+        "macos-seatbelt" => SandboxType::MacosSeatbelt,
+        #[cfg(target_os = "linux")]
+        "linux-landlock" => SandboxType::LinuxLandlock,
+        _ => SandboxType::None,
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn is_process_alive(pid: u32) -> bool {
+    let pid = i32::try_from(pid).unwrap_or(i32::MAX);
+    // SAFETY: kill(pid, 0) only probes process existence and sends no signal.
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn is_process_alive(_pid: u32) -> bool {
+    false
 }
 
 /// Truncate output to `MAX_OUTPUT_SIZE`
@@ -646,6 +887,37 @@ fn shared_shell_manager(workspace: &std::path::Path) -> SharedShellManager {
         .entry(key.clone())
         .or_insert_with(|| new_shared_shell_manager(key))
         .clone()
+}
+
+/// Get the shared shell manager for a workspace.
+pub fn shared_shell_manager_for_workspace(workspace: &std::path::Path) -> SharedShellManager {
+    let manager = shared_shell_manager(workspace);
+    if let Ok(mut guard) = manager.lock() {
+        let _ = guard.ensure_state_loaded();
+    }
+    manager
+}
+
+/// Restore persisted background shell state for a workspace.
+#[must_use]
+pub fn restore_shell_state_for_workspace(
+    workspace: &std::path::Path,
+    force_reload: bool,
+) -> ShellRestoreReport {
+    let manager = shared_shell_manager(workspace);
+    let Ok(mut manager) = manager.lock() else {
+        return ShellRestoreReport {
+            restored_jobs: 0,
+            orphaned_jobs: 0,
+            warnings: vec!["Failed to lock shell manager".to_string()],
+        };
+    };
+
+    if force_reload {
+        manager.reload_state()
+    } else {
+        manager.ensure_state_loaded()
+    }
 }
 
 // === ToolSpec Implementations ===
@@ -802,7 +1074,7 @@ impl ToolSpec for ExecShellTool {
 
         let policy_override = policy_override_from_context(context);
         let result = if background {
-            let manager = shared_shell_manager(&context.workspace);
+            let manager = shared_shell_manager_for_workspace(&context.workspace);
             let mut manager = manager
                 .lock()
                 .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
@@ -900,7 +1172,7 @@ impl ToolSpec for ExecShellWaitTool {
         let block = optional_bool(&input, "block", true);
         let timeout_ms = optional_u64(&input, "timeout_ms", 120_000).min(600_000);
 
-        let manager = shared_shell_manager(&context.workspace);
+        let manager = shared_shell_manager_for_workspace(&context.workspace);
         let mut manager = manager
             .lock()
             .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
@@ -933,6 +1205,201 @@ impl ExecShellKillTool {
     #[must_use]
     pub fn new(name: &'static str) -> Self {
         Self { name }
+    }
+}
+
+/// Tool for listing background shell commands.
+pub struct ExecShellListTool {
+    name: &'static str,
+}
+
+impl ExecShellListTool {
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ExecShellListTool {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "List tracked background exec_shell tasks."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter: running|completed|failed|killed|timedout|orphaned"
+                }
+            }
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::ReadOnly]
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let status_filter = input
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+
+        let manager = shared_shell_manager_for_workspace(&context.workspace);
+        let mut manager = manager
+            .lock()
+            .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
+        let mut tasks = manager.list();
+
+        if let Some(filter) = status_filter.as_deref() {
+            tasks.retain(|task| {
+                let label = match task.status {
+                    ShellStatus::Running => "running",
+                    ShellStatus::Completed => "completed",
+                    ShellStatus::Failed => "failed",
+                    ShellStatus::Killed => "killed",
+                    ShellStatus::TimedOut => "timedout",
+                    ShellStatus::Orphaned => "orphaned",
+                };
+                label == filter
+            });
+        }
+
+        if tasks.is_empty() {
+            return Ok(ToolResult::success("No background shell tasks."));
+        }
+
+        let mut lines = vec![format!("Background shell tasks: {}", tasks.len())];
+        for task in &tasks {
+            let task_id = task.task_id.as_deref().unwrap_or("unknown");
+            lines.push(format!(
+                "- {task_id} | {:?} | exit={:?} | {}ms",
+                task.status, task.exit_code, task.duration_ms
+            ));
+        }
+
+        Ok(ToolResult {
+            content: lines.join("\n"),
+            success: true,
+            metadata: Some(json!({
+                "count": tasks.len(),
+                "tasks": tasks,
+            })),
+        })
+    }
+}
+
+/// Tool for cleaning tracked background shell commands.
+pub struct ExecShellCleanTool {
+    name: &'static str,
+}
+
+impl ExecShellCleanTool {
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+#[async_trait]
+impl ToolSpec for ExecShellCleanTool {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn description(&self) -> &'static str {
+        "Clean tracked background exec_shell tasks. Optionally kills running tasks first."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "max_age_ms": {
+                    "type": "integer",
+                    "description": "Remove completed tasks older than this age (default: 300000)"
+                },
+                "kill_running": {
+                    "type": "boolean",
+                    "description": "Kill running tasks before cleanup (default: false)"
+                }
+            }
+        })
+    }
+
+    fn capabilities(&self) -> Vec<ToolCapability> {
+        vec![ToolCapability::RequiresApproval]
+    }
+
+    fn approval_requirement(&self) -> ApprovalRequirement {
+        ApprovalRequirement::Required
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let max_age_ms = optional_u64(&input, "max_age_ms", 300_000).min(86_400_000);
+        let kill_running = optional_bool(&input, "kill_running", false);
+
+        let manager = shared_shell_manager_for_workspace(&context.workspace);
+        let mut manager = manager
+            .lock()
+            .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
+
+        let before = manager.list();
+
+        let mut killed = 0usize;
+        if kill_running {
+            let running_ids: Vec<String> = before
+                .iter()
+                .filter(|task| task.status == ShellStatus::Running)
+                .filter_map(|task| task.task_id.clone())
+                .collect();
+            for task_id in running_ids {
+                if manager.kill(&task_id).is_ok() {
+                    killed += 1;
+                }
+            }
+            manager.cleanup(Duration::from_millis(0));
+        } else {
+            manager.cleanup(Duration::from_millis(max_age_ms));
+        }
+
+        let after = manager.list();
+        let removed = before.len().saturating_sub(after.len());
+
+        Ok(ToolResult {
+            content: format!(
+                "Background task cleanup complete.\nRemoved: {removed}\nKilled: {killed}\nRemaining: {}",
+                after.len()
+            ),
+            success: true,
+            metadata: Some(json!({
+                "removed": removed,
+                "killed": killed,
+                "remaining": after.len(),
+                "max_age_ms": max_age_ms,
+                "kill_running": kill_running,
+            })),
+        })
     }
 }
 
@@ -974,7 +1441,7 @@ impl ToolSpec for ExecShellKillTool {
     ) -> Result<ToolResult, ToolError> {
         let task_id = required_str(&input, "task_id")?;
 
-        let manager = shared_shell_manager(&context.workspace);
+        let manager = shared_shell_manager_for_workspace(&context.workspace);
         let mut manager = manager
             .lock()
             .map_err(|_| ToolError::execution_failed("Failed to lock shell manager"))?;
@@ -1255,6 +1722,93 @@ mod tests {
 
         assert!(truncated.len() < long_output.len());
         assert!(truncated.contains("truncated"));
+    }
+
+    #[test]
+    fn test_state_roundtrip_serialization() {
+        let tmp = tempdir().expect("tempdir");
+        let mut manager = ShellManager::new(tmp.path().to_path_buf());
+        let result = manager
+            .execute(&echo_command("persist"), None, 5_000, true)
+            .expect("execute");
+        let task_id = result.task_id.expect("task id");
+
+        let _ = manager
+            .get_output(&task_id, true, 5_000)
+            .expect("wait for completion");
+        manager.save_state().expect("persist state");
+
+        let mut restored = ShellManager::new(tmp.path().to_path_buf());
+        let report = restored.reload_state();
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.restored_jobs, 1);
+        assert_eq!(report.orphaned_jobs, 0);
+        assert_eq!(restored.list().len(), 1);
+    }
+
+    #[test]
+    fn test_restore_marks_running_jobs_orphaned() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp
+            .path()
+            .join(".minimax")
+            .join("state")
+            .join(SHELL_STATE_FILE_NAME);
+        std::fs::create_dir_all(state_path.parent().expect("state parent")).expect("mkdir");
+
+        let persisted = PersistedShellState {
+            version: SHELL_STATE_VERSION,
+            tasks: vec![PersistedShellTask {
+                id: "shell_deadbeef".to_string(),
+                command: "sleep 60".to_string(),
+                working_dir: tmp.path().to_path_buf(),
+                status: ShellStatus::Running,
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                started_at_unix_ms: Utc::now().timestamp_millis(),
+                updated_at_unix_ms: Utc::now().timestamp_millis(),
+                sandbox_type: "none".to_string(),
+                pid: Some(u32::MAX),
+            }],
+        };
+        std::fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&persisted).expect("json"),
+        )
+        .expect("write");
+
+        let mut restored = ShellManager::new(tmp.path().to_path_buf());
+        let report = restored.reload_state();
+        assert_eq!(report.restored_jobs, 1);
+        assert_eq!(report.orphaned_jobs, 1);
+
+        let jobs = restored.list();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].status, ShellStatus::Orphaned);
+        assert!(jobs[0].stderr.contains("orphaned"));
+    }
+
+    #[test]
+    fn test_restore_handles_corrupt_state_file() {
+        let tmp = tempdir().expect("tempdir");
+        let state_path = tmp
+            .path()
+            .join(".minimax")
+            .join("state")
+            .join(SHELL_STATE_FILE_NAME);
+        std::fs::create_dir_all(state_path.parent().expect("state parent")).expect("mkdir");
+        std::fs::write(&state_path, "{not valid json").expect("write");
+
+        let mut manager = ShellManager::new(tmp.path().to_path_buf());
+        let report = manager.reload_state();
+        assert!(report.restored_jobs == 0);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("Failed to parse"))
+        );
     }
 
     #[tokio::test]

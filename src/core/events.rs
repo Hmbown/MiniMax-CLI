@@ -10,6 +10,14 @@ use crate::models::{Message, SystemPrompt, Usage};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::SubAgentResult;
 
+/// Outcome status for a completed turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnOutcomeStatus {
+    Completed,
+    Interrupted,
+    Failed,
+}
+
 /// Events emitted by the engine to update the UI.
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -55,7 +63,11 @@ pub enum Event {
     TurnStarted,
 
     /// The turn is complete (no more tool calls)
-    TurnComplete { usage: Usage },
+    TurnComplete {
+        usage: Usage,
+        status: TurnOutcomeStatus,
+        error: Option<String>,
+    },
 
     // === Sub-Agent Events (for RLM mode) ===
     /// A sub-agent has been spawned
@@ -98,6 +110,35 @@ pub enum Event {
         id: String,
         tool_name: String,
         description: String,
+    },
+
+    /// Auto/manual context compaction started.
+    CompactionStarted {
+        id: String,
+        auto: bool,
+        message: String,
+    },
+
+    /// Context compaction completed.
+    CompactionCompleted {
+        id: String,
+        auto: bool,
+        message: String,
+    },
+
+    /// Context compaction failed.
+    CompactionFailed {
+        id: String,
+        auto: bool,
+        message: String,
+    },
+
+    /// A tool required elevated sandbox permissions.
+    ElevationRequired {
+        tool_id: String,
+        tool_name: String,
+        denial_reason: String,
+        command: Option<String>,
     },
 }
 

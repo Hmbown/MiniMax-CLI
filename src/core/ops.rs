@@ -3,6 +3,7 @@
 //! These operations flow from the TUI to the engine via a channel,
 //! allowing the UI to remain responsive while the engine processes requests.
 
+use crate::compaction::CompactionConfig;
 use crate::models::{Message, SystemPrompt};
 use crate::tui::app::AppMode;
 use std::path::PathBuf;
@@ -19,6 +20,9 @@ pub enum Op {
         trust_mode: bool,
     },
 
+    /// Steer an active turn with additional guidance.
+    Steer { content: String },
+
     /// Cancel the current request
     CancelRequest,
 
@@ -34,6 +38,19 @@ pub enum Op {
     /// List current sub-agents and their status
     ListSubAgents,
 
+    /// Get one sub-agent status/result, optionally waiting for completion.
+    GetSubAgent {
+        agent_id: String,
+        block: bool,
+        timeout_ms: u64,
+    },
+
+    /// Cancel a running sub-agent.
+    CancelSubAgent { agent_id: String },
+
+    /// Clean completed sub-agents older than max_age_ms.
+    CleanSubAgents { max_age_ms: u64 },
+
     /// Change the operating mode
     ChangeMode { mode: AppMode },
 
@@ -48,11 +65,20 @@ pub enum Op {
         workspace: PathBuf,
     },
 
+    /// Reload persisted runtime lifecycle state (jobs/subagents).
+    ReloadRuntimeState,
+
     /// Shutdown the engine
     Shutdown,
 
     /// Trigger manual context compaction
     CompactContext,
+
+    /// Enable or disable automatic context compaction.
+    SetAutoCompact { enabled: bool },
+
+    /// Update compaction thresholds/prompt.
+    SetCompactionConfig { config: CompactionConfig },
 }
 
 impl Op {

@@ -113,10 +113,14 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
         return CommandResult::error(format!("{e}"));
     }
 
+    let mut auto_compact_action: Option<crate::tui::app::AppAction> = None;
+
     // Apply to current session
     match key.as_str() {
         "auto_compact" | "compact" => {
             app.auto_compact = settings.auto_compact;
+            auto_compact_action =
+                Some(crate::tui::app::AppAction::SetAutoCompact(app.auto_compact));
         }
         "show_thinking" | "thinking" => {
             app.show_thinking = settings.show_thinking;
@@ -157,7 +161,16 @@ pub fn set_config(app: &mut App, args: Option<&str>) -> CommandResult {
         if let Err(e) = settings.save() {
             return CommandResult::error(format!("Failed to save: {e}"));
         }
-        CommandResult::message(format!("{key} = {value} (saved)"))
+        if let Some(action) = auto_compact_action {
+            CommandResult::with_message_and_action(format!("{key} = {value} (saved)"), action)
+        } else {
+            CommandResult::message(format!("{key} = {value} (saved)"))
+        }
+    } else if let Some(action) = auto_compact_action {
+        CommandResult::with_message_and_action(
+            format!("{key} = {value} (session only, add --save to persist)"),
+            action,
+        )
     } else {
         CommandResult::message(format!(
             "{key} = {value} (session only, add --save to persist)"

@@ -5,18 +5,20 @@
 //! inherit the workspace configuration from the main session.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{sync::mpsc, task::JoinHandle};
 use uuid::Uuid;
 
-use crate::client::AnthropicClient;
+use crate::client::MiniMaxTextClient;
 use crate::core::events::Event;
 use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt, Tool};
 use crate::tools::plan::{PlanState, SharedPlanState};
@@ -141,7 +143,7 @@ pub struct SubAgentResult {
 /// Runtime configuration for spawning sub-agents.
 #[derive(Clone)]
 pub struct SubAgentRuntime {
-    pub client: AnthropicClient,
+    pub client: MiniMaxTextClient,
     pub model: String,
     pub context: ToolContext,
     pub allow_shell: bool,
@@ -152,7 +154,7 @@ impl SubAgentRuntime {
     /// Create a runtime configuration for sub-agent execution.
     #[must_use]
     pub fn new(
-        client: AnthropicClient,
+        client: MiniMaxTextClient,
         model: String,
         context: ToolContext,
         allow_shell: bool,
@@ -177,6 +179,8 @@ pub struct SubAgent {
     pub result: Option<String>,
     pub steps_taken: u32,
     pub started_at: Instant,
+    pub created_at_utc: DateTime<Utc>,
+    pub updated_at_utc: DateTime<Utc>,
     pub allowed_tools: Vec<String>,
     task_handle: Option<JoinHandle<()>>,
 }
@@ -185,6 +189,7 @@ impl SubAgent {
     /// Create a new sub-agent.
     fn new(agent_type: SubAgentType, prompt: String, allowed_tools: Vec<String>) -> Self {
         let id = format!("agent_{}", &Uuid::new_v4().to_string()[..8]);
+        let now = Utc::now();
 
         Self {
             id,
@@ -194,6 +199,8 @@ impl SubAgent {
             result: None,
             steps_taken: 0,
             started_at: Instant::now(),
+            created_at_utc: now,
+            updated_at_utc: now,
             allowed_tools,
             task_handle: None,
         }
@@ -213,12 +220,60 @@ impl SubAgent {
     }
 }
 
+const SUBAGENT_STATE_FILE_NAME: &str = "subagents.json";
+const SUBAGENT_STATE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSubAgentState {
+    version: u32,
+    agents: Vec<PersistedSubAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSubAgent {
+    id: String,
+    agent_type: SubAgentType,
+    prompt: String,
+    status: SubAgentStatus,
+    result: Option<String>,
+    steps_taken: u32,
+    started_at_unix_ms: i64,
+    created_at_unix_ms: i64,
+    updated_at_unix_ms: i64,
+    allowed_tools: Vec<String>,
+}
+
+impl PersistedSubAgent {
+    fn from_agent(agent: &SubAgent) -> Self {
+        Self {
+            id: agent.id.clone(),
+            agent_type: agent.agent_type.clone(),
+            prompt: agent.prompt.clone(),
+            status: agent.status.clone(),
+            result: agent.result.clone(),
+            steps_taken: agent.steps_taken,
+            started_at_unix_ms: agent.created_at_utc.timestamp_millis(),
+            created_at_unix_ms: agent.created_at_utc.timestamp_millis(),
+            updated_at_unix_ms: agent.updated_at_utc.timestamp_millis(),
+            allowed_tools: agent.allowed_tools.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubAgentRestoreReport {
+    pub restored_agents: usize,
+    pub interrupted_agents: usize,
+    pub warnings: Vec<String>,
+}
+
 /// Manager for active sub-agents.
 pub struct SubAgentManager {
     agents: HashMap<String, SubAgent>,
     workspace: PathBuf,
     max_steps: u32,
     max_agents: usize,
+    state_loaded: bool,
 }
 
 impl SubAgentManager {
@@ -230,6 +285,7 @@ impl SubAgentManager {
             workspace,
             max_steps: DEFAULT_MAX_STEPS,
             max_agents,
+            state_loaded: false,
         }
     }
 
@@ -241,6 +297,122 @@ impl SubAgentManager {
             .count()
     }
 
+    fn state_file_path(&self) -> PathBuf {
+        self.workspace
+            .join(".minimax")
+            .join("state")
+            .join(SUBAGENT_STATE_FILE_NAME)
+    }
+
+    fn save_state(&self) -> Result<()> {
+        let state_path = self.state_file_path();
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("Failed to create {}: {e}", parent.display()))?;
+        }
+
+        let state = PersistedSubAgentState {
+            version: SUBAGENT_STATE_VERSION,
+            agents: self
+                .agents
+                .values()
+                .map(PersistedSubAgent::from_agent)
+                .collect(),
+        };
+        let content = serde_json::to_string_pretty(&state)
+            .map_err(|e| anyhow!("Failed to serialize {}: {e}", state_path.display()))?;
+        fs::write(&state_path, content)
+            .map_err(|e| anyhow!("Failed to write {}: {e}", state_path.display()))?;
+        Ok(())
+    }
+
+    fn save_state_soft(&self) {
+        if let Err(err) = self.save_state() {
+            eprintln!("Warning: failed to persist sub-agent state: {err}");
+        }
+    }
+
+    pub fn ensure_state_loaded(&mut self) -> SubAgentRestoreReport {
+        if self.state_loaded {
+            SubAgentRestoreReport::default()
+        } else {
+            self.load_state()
+        }
+    }
+
+    pub fn reload_state(&mut self) -> SubAgentRestoreReport {
+        self.state_loaded = false;
+        self.load_state()
+    }
+
+    fn load_state(&mut self) -> SubAgentRestoreReport {
+        self.state_loaded = true;
+        let mut report = SubAgentRestoreReport::default();
+        let state_path = self.state_file_path();
+        let content = match fs::read_to_string(&state_path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return report,
+            Err(err) => {
+                report.warnings.push(format!(
+                    "Failed to read sub-agent state {}: {err}",
+                    state_path.display()
+                ));
+                return report;
+            }
+        };
+
+        let persisted = match serde_json::from_str::<PersistedSubAgentState>(&content) {
+            Ok(persisted) => persisted,
+            Err(err) => {
+                report.warnings.push(format!(
+                    "Failed to parse sub-agent state {}: {err}",
+                    state_path.display()
+                ));
+                return report;
+            }
+        };
+
+        for agent in persisted.agents {
+            if self.agents.contains_key(&agent.id) {
+                continue;
+            }
+
+            let mut status = agent.status;
+            if status == SubAgentStatus::Running {
+                status = SubAgentStatus::Failed(
+                    "interrupted: previous MiniMax session ended before completion".to_string(),
+                );
+                report.interrupted_agents += 1;
+            }
+
+            let started_at = instant_from_unix_ms(agent.started_at_unix_ms);
+            let created_at_utc = datetime_from_unix_millis(agent.created_at_unix_ms);
+            let updated_at_utc = datetime_from_unix_millis(agent.updated_at_unix_ms);
+
+            let subagent = SubAgent {
+                id: agent.id.clone(),
+                agent_type: agent.agent_type,
+                prompt: agent.prompt,
+                status,
+                result: agent.result,
+                steps_taken: agent.steps_taken,
+                started_at,
+                created_at_utc,
+                updated_at_utc,
+                allowed_tools: agent.allowed_tools,
+                task_handle: None,
+            };
+            self.agents.insert(agent.id, subagent);
+            report.restored_agents += 1;
+        }
+
+        if report.restored_agents > 0 || report.interrupted_agents > 0 {
+            self.save_state_soft();
+        }
+
+        report
+    }
+
     /// Spawn a new background sub-agent.
     pub fn spawn_background(
         &mut self,
@@ -250,6 +422,8 @@ impl SubAgentManager {
         prompt: String,
         allowed_tools: Option<Vec<String>>,
     ) -> Result<SubAgentResult> {
+        let _ = self.ensure_state_loaded();
+
         if self.running_count() >= self.max_agents {
             return Err(anyhow!(
                 "Sub-agent limit reached (max {}). Cancel or wait for an existing agent to finish.",
@@ -283,6 +457,7 @@ impl SubAgentManager {
         let handle = tokio::spawn(run_subagent_task(task));
         agent.task_handle = Some(handle);
         self.agents.insert(agent_id.clone(), agent);
+        self.save_state_soft();
 
         Ok(self
             .agents
@@ -309,12 +484,15 @@ impl SubAgentManager {
 
         if agent.status == SubAgentStatus::Running {
             agent.status = SubAgentStatus::Cancelled;
+            agent.updated_at_utc = Utc::now();
             if let Some(handle) = agent.task_handle.take() {
                 handle.abort();
             }
         }
 
-        Ok(agent.snapshot())
+        let snapshot = agent.snapshot();
+        self.save_state_soft();
+        Ok(snapshot)
     }
 
     /// List all agents and their status.
@@ -332,6 +510,7 @@ impl SubAgentManager {
                 agent.started_at.elapsed() < max_age
             }
         });
+        self.save_state_soft();
     }
 
     fn update_from_result(&mut self, agent_id: &str, result: SubAgentResult) {
@@ -340,14 +519,18 @@ impl SubAgentManager {
             agent.result = result.result;
             agent.steps_taken = result.steps_taken;
             agent.task_handle = None;
+            agent.updated_at_utc = Utc::now();
         }
+        self.save_state_soft();
     }
 
     fn update_failed(&mut self, agent_id: &str, error: String) {
         if let Some(agent) = self.agents.get_mut(agent_id) {
             agent.status = SubAgentStatus::Failed(error);
             agent.task_handle = None;
+            agent.updated_at_utc = Utc::now();
         }
+        self.save_state_soft();
     }
 }
 
@@ -359,6 +542,27 @@ pub type SharedSubAgentManager = Arc<Mutex<SubAgentManager>>;
 pub fn new_shared_subagent_manager(workspace: PathBuf, max_agents: usize) -> SharedSubAgentManager {
     let max_agents = max_agents.clamp(1, 5);
     Arc::new(Mutex::new(SubAgentManager::new(workspace, max_agents)))
+}
+
+/// Restore persisted sub-agent state for a manager.
+#[must_use]
+pub fn restore_subagent_state(
+    manager: &SharedSubAgentManager,
+    force_reload: bool,
+) -> SubAgentRestoreReport {
+    let Ok(mut manager) = manager.lock() else {
+        return SubAgentRestoreReport {
+            restored_agents: 0,
+            interrupted_agents: 0,
+            warnings: vec!["Failed to lock sub-agent manager".to_string()],
+        };
+    };
+
+    if force_reload {
+        manager.reload_state()
+    } else {
+        manager.ensure_state_loaded()
+    }
 }
 
 // === Tool Implementations ===
@@ -522,10 +726,11 @@ impl ToolSpec for AgentResultTool {
         let result = if block {
             wait_for_result(&self.manager, agent_id, Duration::from_millis(timeout_ms)).await?
         } else {
-            let manager = self
+            let mut manager = self
                 .manager
                 .lock()
                 .map_err(|_| ToolError::execution_failed("Failed to lock sub-agent manager"))?;
+            let _ = manager.ensure_state_loaded();
             manager
                 .get_result(agent_id)
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
@@ -593,6 +798,7 @@ impl ToolSpec for AgentCancelTool {
             .manager
             .lock()
             .map_err(|_| ToolError::execution_failed("Failed to lock sub-agent manager"))?;
+        let _ = manager.ensure_state_loaded();
         let result = manager
             .cancel(agent_id)
             .map_err(|e| ToolError::execution_failed(format!("Failed to cancel sub-agent: {e}")))?;
@@ -640,10 +846,11 @@ impl ToolSpec for AgentListTool {
         _input: Value,
         _context: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let manager = self
+        let mut manager = self
             .manager
             .lock()
             .map_err(|_| ToolError::execution_failed("Failed to lock sub-agent manager"))?;
+        let _ = manager.ensure_state_loaded();
         let results = manager.list();
         ToolResult::json(&results).map_err(|e| ToolError::execution_failed(e.to_string()))
     }
@@ -826,9 +1033,10 @@ async fn wait_for_result(
 
     loop {
         let snapshot = {
-            let manager = manager
+            let mut manager = manager
                 .lock()
                 .map_err(|_| ToolError::execution_failed("Failed to lock sub-agent manager"))?;
+            let _ = manager.ensure_state_loaded();
             manager
                 .get_result(agent_id)
                 .map_err(|e| ToolError::execution_failed(e.to_string()))?
@@ -927,6 +1135,21 @@ fn build_allowed_tools(
     }
 
     Ok(tools)
+}
+
+fn instant_from_unix_ms(timestamp_ms: i64) -> Instant {
+    let timestamp_ms = u64::try_from(timestamp_ms).unwrap_or(0);
+    let then = UNIX_EPOCH + Duration::from_millis(timestamp_ms);
+    let elapsed = SystemTime::now()
+        .duration_since(then)
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    Instant::now()
+        .checked_sub(elapsed)
+        .unwrap_or_else(Instant::now)
+}
+
+fn datetime_from_unix_millis(timestamp_ms: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms).unwrap_or_else(Utc::now)
 }
 
 fn summarize_subagent_result(result: &SubAgentResult) -> String {
@@ -1071,5 +1294,90 @@ mod tests {
         manager.agents.insert(agent.id.clone(), agent);
 
         assert_eq!(manager.running_count(), 1);
+    }
+
+    #[test]
+    fn test_state_roundtrip_serialization() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+        let mut agent = SubAgent::new(
+            SubAgentType::Plan,
+            "summarize project".to_string(),
+            vec!["read_file".to_string()],
+        );
+        agent.status = SubAgentStatus::Completed;
+        agent.result = Some("done".to_string());
+        agent.steps_taken = 3;
+        manager.agents.insert(agent.id.clone(), agent);
+        manager.save_state().expect("save");
+
+        let mut restored = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+        let report = restored.reload_state();
+        assert!(report.warnings.is_empty());
+        assert_eq!(report.restored_agents, 1);
+        assert_eq!(report.interrupted_agents, 0);
+        assert_eq!(restored.list().len(), 1);
+    }
+
+    #[test]
+    fn test_restore_marks_running_agents_interrupted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state_path = tmp
+            .path()
+            .join(".minimax")
+            .join("state")
+            .join(SUBAGENT_STATE_FILE_NAME);
+        std::fs::create_dir_all(state_path.parent().expect("state parent")).expect("mkdir");
+
+        let persisted = PersistedSubAgentState {
+            version: SUBAGENT_STATE_VERSION,
+            agents: vec![PersistedSubAgent {
+                id: "agent_deadbeef".to_string(),
+                agent_type: SubAgentType::General,
+                prompt: "do work".to_string(),
+                status: SubAgentStatus::Running,
+                result: None,
+                steps_taken: 4,
+                started_at_unix_ms: Utc::now().timestamp_millis(),
+                created_at_unix_ms: Utc::now().timestamp_millis(),
+                updated_at_unix_ms: Utc::now().timestamp_millis(),
+                allowed_tools: vec!["read_file".to_string()],
+            }],
+        };
+        std::fs::write(
+            &state_path,
+            serde_json::to_string_pretty(&persisted).expect("json"),
+        )
+        .expect("write");
+
+        let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+        let report = manager.reload_state();
+        assert_eq!(report.restored_agents, 1);
+        assert_eq!(report.interrupted_agents, 1);
+        let list = manager.list();
+        assert_eq!(list.len(), 1);
+        assert!(matches!(list[0].status, SubAgentStatus::Failed(_)));
+    }
+
+    #[test]
+    fn test_restore_handles_corrupt_state_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state_path = tmp
+            .path()
+            .join(".minimax")
+            .join("state")
+            .join(SUBAGENT_STATE_FILE_NAME);
+        std::fs::create_dir_all(state_path.parent().expect("state parent")).expect("mkdir");
+        std::fs::write(&state_path, "{invalid json").expect("write");
+
+        let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 2);
+        let report = manager.reload_state();
+        assert_eq!(report.restored_agents, 0);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Failed to parse"))
+        );
     }
 }

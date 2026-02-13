@@ -123,10 +123,13 @@ pub fn compact(app: &mut App, arg: Option<&str>) -> CommandResult {
         _ => {
             // Toggle auto-compact setting
             app.auto_compact = !app.auto_compact;
-            CommandResult::message(format!(
-                "Auto-compact: {}\n\nTip: Use '/compact now' to trigger manual compaction",
-                if app.auto_compact { "ON" } else { "OFF" }
-            ))
+            CommandResult::with_message_and_action(
+                format!(
+                    "Auto-compact: {}\n\nTip: Use '/compact now' to trigger manual compaction",
+                    if app.auto_compact { "ON" } else { "OFF" }
+                ),
+                crate::tui::app::AppAction::SetAutoCompact(app.auto_compact),
+            )
         }
     }
 }
@@ -225,8 +228,16 @@ pub fn reset(app: &mut App) -> CommandResult {
     // Clear pinned messages
     app.clear_pins();
 
-    // 6. Show confirmation message
-    CommandResult::message("Session reset - all history, todos, and state cleared")
+    // 6. Sync cleared state back to engine/session runtime
+    CommandResult::with_message_and_action(
+        "Session reset - all history, todos, and state cleared",
+        crate::tui::app::AppAction::SyncSession {
+            messages: app.api_messages.clone(),
+            system_prompt: app.system_prompt.clone(),
+            model: app.model.clone(),
+            workspace: app.workspace.clone(),
+        },
+    )
 }
 
 fn render_tool_cell(tool: &crate::tui::history::ToolCell, width: u16) -> String {

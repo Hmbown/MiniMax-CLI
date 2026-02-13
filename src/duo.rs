@@ -759,7 +759,7 @@ where
             session_id: "".to_string(),
         })?;
 
-    let coding_model = "MiniMax-M2.1-Coding".to_string();
+    let coding_model = "MiniMax-M2.5-Coding".to_string();
 
     while !state.is_complete() {
         match state.phase {

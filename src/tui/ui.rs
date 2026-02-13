@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::fs;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -36,7 +37,11 @@ use crate::models::{ContentBlock, Message, SystemPrompt};
 use crate::palette;
 use crate::prompts;
 use crate::rlm;
+use crate::runtime_threads::{RuntimeThreadManager, RuntimeThreadManagerConfig};
 use crate::session_manager::{SessionManager, create_saved_session, update_session};
+use crate::task_manager::{
+    NewTaskRequest, SharedTaskManager, TaskManager, TaskManagerConfig, TaskStatus,
+};
 use crate::tools::spec::{ToolError, ToolResult};
 use crate::tools::subagent::{SubAgentResult, SubAgentStatus};
 use crate::tui::command_completer::CommandCompleter;
@@ -192,6 +197,7 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         cache_system: true,
         cache_tools: true,
         auto_compact: app.auto_compact,
+        compaction: config.compaction_config_for_model(&app.model),
     };
 
     // Spawn the Engine - it will handle all API communication
@@ -214,12 +220,54 @@ pub async fn run_tui(config: &Config, options: TuiOptions) -> Result<()> {
         let _ = app.execute_hooks(HookEvent::SessionStart, &context);
     }
 
+    let task_cfg = TaskManagerConfig::from_runtime(
+        config,
+        app.workspace.clone(),
+        Some(app.model.clone()),
+        None,
+    );
+    let task_manager = match RuntimeThreadManager::open(
+        config.clone(),
+        app.workspace.clone(),
+        RuntimeThreadManagerConfig::from_task_data_dir(task_cfg.data_dir.clone()),
+    ) {
+        Ok(runtime_threads) => {
+            match TaskManager::start_with_runtime_manager(
+                task_cfg,
+                config.clone(),
+                Arc::new(runtime_threads),
+            )
+            .await
+            {
+                Ok(manager) => Some(manager),
+                Err(err) => {
+                    app.add_message(HistoryCell::System {
+                        content: format!("Task runtime unavailable: {err}"),
+                    });
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            app.add_message(HistoryCell::System {
+                content: format!("Task runtime unavailable: {err}"),
+            });
+            None
+        }
+    };
+
+    if let Some(manager) = task_manager.as_ref() {
+        let tasks = manager.list_tasks(Some(10)).await;
+        refresh_task_panel(&mut app, &tasks);
+    }
+
     let result = run_event_loop(
         &mut terminal,
         &mut app,
         config,
         engine_handle,
         &event_broker,
+        task_manager,
     )
     .await;
 
@@ -248,6 +296,7 @@ async fn run_event_loop(
     _config: &Config,
     engine_handle: EngineHandle,
     event_broker: &EventBroker,
+    task_manager: Option<SharedTaskManager>,
 ) -> Result<()> {
     // Track streaming state
     let mut current_streaming_text = String::new();
@@ -365,7 +414,7 @@ async fn run_event_loop(
                         app.last_reasoning = None;
                         app.pending_tool_uses.clear();
                     }
-                    EngineEvent::TurnComplete { usage } => {
+                    EngineEvent::TurnComplete { usage, .. } => {
                         app.is_loading = false;
                         app.turn_started_at = None;
                         let turn_tokens = usage.input_tokens + usage.output_tokens;
@@ -514,6 +563,24 @@ async fn run_event_loop(
                     EngineEvent::ToolCallProgress { id, output } => {
                         app.status_message =
                             Some(format!("Tool {id}: {}", summarize_tool_output(&output)));
+                    }
+                    EngineEvent::CompactionStarted { message, .. } => {
+                        app.status_message = Some(message);
+                    }
+                    EngineEvent::CompactionCompleted { message, .. } => {
+                        app.status_message = Some(message);
+                    }
+                    EngineEvent::CompactionFailed { message, .. } => {
+                        app.status_message = Some(message);
+                    }
+                    EngineEvent::ElevationRequired {
+                        tool_name,
+                        denial_reason,
+                        ..
+                    } => {
+                        app.add_message(HistoryCell::System {
+                            content: format!("Sandbox denied tool '{tool_name}': {denial_reason}"),
+                        });
                     }
                 }
             }
@@ -887,11 +954,182 @@ async fn run_event_loop(
                                     AppAction::ListSubAgents => {
                                         let _ = engine_handle.send(Op::ListSubAgents).await;
                                     }
+                                    AppAction::GetSubAgent {
+                                        agent_id,
+                                        block,
+                                        timeout_ms,
+                                    } => {
+                                        let _ = engine_handle
+                                            .send(Op::GetSubAgent {
+                                                agent_id,
+                                                block,
+                                                timeout_ms,
+                                            })
+                                            .await;
+                                    }
+                                    AppAction::CancelSubAgent { agent_id } => {
+                                        let _ = engine_handle
+                                            .send(Op::CancelSubAgent { agent_id })
+                                            .await;
+                                    }
+                                    AppAction::TaskAdd { prompt } => {
+                                        if let Some(manager) = task_manager.as_ref() {
+                                            let request = NewTaskRequest {
+                                                prompt,
+                                                model: Some(app.model.clone()),
+                                                workspace: Some(app.workspace.clone()),
+                                                mode: Some(app.mode.label().to_ascii_lowercase()),
+                                                allow_shell: Some(app.allow_shell),
+                                                trust_mode: Some(app.trust_mode),
+                                                auto_approve: Some(matches!(
+                                                    app.approval_mode,
+                                                    ApprovalMode::Auto
+                                                )),
+                                            };
+                                            match manager.add_task(request).await {
+                                                Ok(task) => {
+                                                    app.runtime_turn_id = task.turn_id.clone();
+                                                    app.runtime_turn_status = Some(
+                                                        task_status_label(task.status).to_string(),
+                                                    );
+                                                    app.add_message(HistoryCell::System {
+                                                        content: format!(
+                                                            "Task queued: {} ({})",
+                                                            task.id,
+                                                            summarize_tool_output(&task.prompt)
+                                                        ),
+                                                    });
+                                                    let tasks = manager.list_tasks(Some(10)).await;
+                                                    refresh_task_panel(app, &tasks);
+                                                }
+                                                Err(err) => app.add_message(HistoryCell::Error {
+                                                    message: format!(
+                                                        "Failed to enqueue task: {err}"
+                                                    ),
+                                                    suggestion: None,
+                                                }),
+                                            }
+                                        } else {
+                                            app.add_message(HistoryCell::Error {
+                                                message: "Task runtime is unavailable".to_string(),
+                                                suggestion: None,
+                                            });
+                                        }
+                                    }
+                                    AppAction::TaskList => {
+                                        if let Some(manager) = task_manager.as_ref() {
+                                            let tasks = manager.list_tasks(Some(20)).await;
+                                            refresh_task_panel(app, &tasks);
+                                            if tasks.is_empty() {
+                                                app.add_message(HistoryCell::System {
+                                                    content: "No tasks found".to_string(),
+                                                });
+                                            } else {
+                                                let lines = tasks
+                                                    .iter()
+                                                    .map(|task| {
+                                                        format!(
+                                                            "{} {} {}",
+                                                            task.id,
+                                                            task_status_label(task.status),
+                                                            task.prompt_summary
+                                                        )
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n");
+                                                app.add_message(HistoryCell::System {
+                                                    content: lines,
+                                                });
+                                            }
+                                        } else {
+                                            app.add_message(HistoryCell::Error {
+                                                message: "Task runtime is unavailable".to_string(),
+                                                suggestion: None,
+                                            });
+                                        }
+                                    }
+                                    AppAction::TaskShow { id } => {
+                                        if let Some(manager) = task_manager.as_ref() {
+                                            match manager.get_task(&id).await {
+                                                Ok(task) => {
+                                                    app.runtime_turn_id = task.turn_id.clone();
+                                                    app.runtime_turn_status = Some(
+                                                        task_status_label(task.status).to_string(),
+                                                    );
+                                                    app.add_message(HistoryCell::System {
+                                                        content: format!(
+                                                            "Task {}: status={} thread={} turn={} prompt={}",
+                                                            task.id,
+                                                            task_status_label(task.status),
+                                                            task.thread_id
+                                                                .as_deref()
+                                                                .unwrap_or("-"),
+                                                            task.turn_id
+                                                                .as_deref()
+                                                                .unwrap_or("-"),
+                                                            summarize_tool_output(&task.prompt)
+                                                        ),
+                                                    });
+                                                    let tasks = manager.list_tasks(Some(10)).await;
+                                                    refresh_task_panel(app, &tasks);
+                                                }
+                                                Err(err) => app.add_message(HistoryCell::Error {
+                                                    message: format!("Task lookup failed: {err}"),
+                                                    suggestion: None,
+                                                }),
+                                            }
+                                        } else {
+                                            app.add_message(HistoryCell::Error {
+                                                message: "Task runtime is unavailable".to_string(),
+                                                suggestion: None,
+                                            });
+                                        }
+                                    }
+                                    AppAction::TaskCancel { id } => {
+                                        if let Some(manager) = task_manager.as_ref() {
+                                            match manager.cancel_task(&id).await {
+                                                Ok(task) => {
+                                                    app.runtime_turn_id = task.turn_id.clone();
+                                                    app.runtime_turn_status = Some(
+                                                        task_status_label(task.status).to_string(),
+                                                    );
+                                                    app.add_message(HistoryCell::System {
+                                                        content: format!(
+                                                            "Task canceled: {} ({})",
+                                                            task.id,
+                                                            task_status_label(task.status)
+                                                        ),
+                                                    });
+                                                    let tasks = manager.list_tasks(Some(10)).await;
+                                                    refresh_task_panel(app, &tasks);
+                                                }
+                                                Err(err) => app.add_message(HistoryCell::Error {
+                                                    message: format!("Cancel failed: {err}"),
+                                                    suggestion: None,
+                                                }),
+                                            }
+                                        } else {
+                                            app.add_message(HistoryCell::Error {
+                                                message: "Task runtime is unavailable".to_string(),
+                                                suggestion: None,
+                                            });
+                                        }
+                                    }
+                                    AppAction::CleanSubAgents { max_age_ms } => {
+                                        let _ = engine_handle
+                                            .send(Op::CleanSubAgents { max_age_ms })
+                                            .await;
+                                    }
                                     AppAction::CompactContext => {
                                         let _ = engine_handle.send(Op::CompactContext).await;
                                         app.add_message(HistoryCell::System {
                                             content: "Compacting context...".to_string(),
                                         });
+                                    }
+                                    AppAction::SetAutoCompact(enabled) => {
+                                        let _ = engine_handle
+                                            .send(Op::SetAutoCompact { enabled })
+                                            .await;
                                     }
                                     AppAction::OpenSessionPicker => {
                                         app.view_stack.push(
@@ -937,7 +1175,9 @@ async fn run_event_loop(
                                                 // Reload settings
                                                 match crate::settings::Settings::load() {
                                                     Ok(settings) => {
-                                                        app.auto_compact = settings.auto_compact;
+                                                        app.auto_compact = config
+                                                            .auto_compact_enabled()
+                                                            .unwrap_or(settings.auto_compact);
                                                         app.show_thinking = settings.show_thinking;
                                                         app.show_tool_details =
                                                             settings.show_tool_details;
@@ -958,6 +1198,33 @@ async fn run_event_loop(
                                                                 _ => AppMode::Normal,
                                                             };
                                                         app.set_mode(mode);
+
+                                                        let _ = engine_handle
+                                                            .send(Op::SetAutoCompact {
+                                                                enabled: app.auto_compact,
+                                                            })
+                                                            .await;
+                                                        let _ = engine_handle
+                                                            .send(Op::SetCompactionConfig {
+                                                                config: config
+                                                                    .compaction_config_for_model(
+                                                                        &app.model,
+                                                                    ),
+                                                            })
+                                                            .await;
+                                                        let _ = engine_handle
+                                                            .send(Op::SyncSession {
+                                                                messages: app.api_messages.clone(),
+                                                                system_prompt: app
+                                                                    .system_prompt
+                                                                    .clone(),
+                                                                model: app.model.clone(),
+                                                                workspace: app.workspace.clone(),
+                                                            })
+                                                            .await;
+                                                        let _ = engine_handle
+                                                            .send(Op::ReloadRuntimeState)
+                                                            .await;
 
                                                         app.add_message(HistoryCell::System {
                                                             content: "Configuration reloaded successfully.".to_string(),
@@ -1952,7 +2219,8 @@ fn render(f: &mut Frame, app: &mut App) {
     // Footer is 2 lines when showing status info, 1 line otherwise
     let show_status_footer = app.current_process.is_some()
         || !app.recent_files.is_empty()
-        || !app.todo_summary().is_empty();
+        || !app.todo_summary().is_empty()
+        || !app.task_summary().is_empty();
     let footer_height = if show_status_footer { 2 } else { 1 };
     let queued_preview = app.queued_message_previews(MAX_QUEUED_PREVIEW);
     let queued_lines = if queued_preview.is_empty() {
@@ -2409,6 +2677,23 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             );
         }
 
+        let task_summary = app.task_summary();
+        if !task_summary.is_empty() {
+            let span = Span::styled(
+                format!("🧵 {}", task_summary),
+                Style::default().fg(palette::TEXT_MUTED),
+            );
+            push_footer_span(
+                &mut status_spans,
+                &mut used,
+                available,
+                " ",
+                separator_style,
+                span,
+                false,
+            );
+        }
+
         // Recent files
         let max_recent_names = if available < 70 { 1 } else { 2 };
         let files_display = app.recent_files_display(max_recent_names);
@@ -2581,6 +2866,29 @@ fn render_command_footer(f: &mut Frame, area: Rect, app: &App) {
 
     let footer = Paragraph::new(Line::from(spans));
     f.render_widget(footer, area);
+}
+
+fn task_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Queued => "queued",
+        TaskStatus::Running => "running",
+        TaskStatus::Completed => "completed",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Canceled => "canceled",
+    }
+}
+
+fn refresh_task_panel(app: &mut App, tasks: &[crate::task_manager::TaskSummary]) {
+    app.task_panel = tasks
+        .iter()
+        .map(|task| crate::tui::app::TaskPanelEntry {
+            id: task.id.clone(),
+            status: task_status_label(task.status).to_string(),
+            prompt_summary: task.prompt_summary.clone(),
+            thread_id: task.thread_id.clone(),
+            turn_id: task.turn_id.clone(),
+        })
+        .collect();
 }
 
 /// Get a contextual hint based on current app state
@@ -3091,7 +3399,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
             ]));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Unofficial CLI for MiniMax M2.1 API",
+                "Unofficial CLI for MiniMax M2.5 API",
                 Style::default().fg(palette::TEXT_MUTED).italic(),
             )));
             lines.push(Line::from(Span::styled(
@@ -3213,7 +3521,7 @@ fn render_onboarding(f: &mut Frame, area: Rect, app: &App) {
                 Line::from(""),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "You're all set! Start chatting with MiniMax M2.1",
+                    "You're all set! Start chatting with MiniMax M2.5",
                     Style::default().fg(palette::TEXT_PRIMARY),
                 )),
                 Line::from(""),

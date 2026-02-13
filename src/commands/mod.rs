@@ -8,6 +8,7 @@ mod core;
 mod debug;
 mod doctor;
 mod init;
+mod jobs;
 mod mcp;
 mod pins;
 mod queue;
@@ -17,6 +18,7 @@ mod session;
 mod setup;
 mod skills;
 mod snippets;
+mod task;
 mod usage;
 
 use crate::tui::app::{App, AppAction, AppMode};
@@ -124,8 +126,20 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "subagents",
         aliases: &["agents"],
-        description: "List sub-agent status",
-        usage: "/subagents",
+        description: "List/manage background sub-agent status",
+        usage: "/subagents [list|show <agent_id>|wait <agent_id> [timeout_ms]|cancel <agent_id>|clean [max_age_ms]]",
+    },
+    CommandInfo {
+        name: "jobs",
+        aliases: &[],
+        description: "List/manage background shell jobs",
+        usage: "/jobs [list|wait <task_id> [timeout_ms]|kill <task_id>|clean [max_age_ms]]",
+    },
+    CommandInfo {
+        name: "task",
+        aliases: &["tasks"],
+        description: "Manage background tasks",
+        usage: "/task [add <prompt>|list|show <id>|cancel <id>]",
     },
     CommandInfo {
         name: "minimax",
@@ -386,7 +400,9 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         "exit" | "quit" | "q" => core::exit(),
         "model" => core::model(app, arg),
         "queue" | "queued" => queue::queue(app, arg),
-        "subagents" | "agents" => core::subagents(app),
+        "subagents" | "agents" => core::subagents(app, arg),
+        "jobs" => jobs::jobs(app, arg),
+        "task" | "tasks" => task::task(app, arg),
         "minimax" | "dashboard" | "api" => core::minimax_links(),
 
         // Session commands

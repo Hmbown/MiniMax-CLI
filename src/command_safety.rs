@@ -254,14 +254,6 @@ pub fn analyze_command(command: &str) -> SafetyAnalysis {
         );
     }
 
-    if command.contains("&&") || command.contains("||") || command.contains(';') {
-        return SafetyAnalysis::dangerous(
-            command,
-            vec!["Command chaining detected".to_string()],
-            vec!["Run commands separately to reduce risk".to_string()],
-        );
-    }
-
     if command.contains("`") || command.contains("$(") {
         return SafetyAnalysis::dangerous(
             command,
@@ -495,6 +487,14 @@ mod tests {
         assert_eq!(analyze_command("git status").level, SafetyLevel::Safe);
         assert_eq!(
             analyze_command("grep pattern file").level,
+            SafetyLevel::Safe
+        );
+        assert_eq!(
+            analyze_command("cargo build && cargo test").level,
+            SafetyLevel::Safe
+        );
+        assert_eq!(
+            analyze_command("git status; git diff").level,
             SafetyLevel::Safe
         );
     }

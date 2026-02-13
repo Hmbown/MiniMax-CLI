@@ -127,13 +127,16 @@ fn enter_api_key() -> Result<String, io::Error> {
 
 fn choose_default_model() -> String {
     println!("\nStep 3/6: Choose your default model");
-    println!("  1) MiniMax-M2.1       - General purpose model");
-    println!("  2) MiniMax-Text-01    - Long context model");
-    println!("  3) MiniMax-Coding-01  - Code generation model");
+    println!("  1) MiniMax-M2.5            - Latest general purpose (2M context, tool calling)");
+    println!("  2) MiniMax-M2.5-lightning - Fast version of M2.5");
+    println!("  3) MiniMax-M2.1           - Polyglot programming mastery");
+    println!("  4) MiniMax-M2             - Efficient agentic model");
+    println!("  5) MiniMax-Text-01        - Long context model");
+    println!("  6) MiniMax-Coding-01      - Code generation model");
     println!();
 
     loop {
-        print!("Enter choice (1-3) [1]: ");
+        print!("Enter choice (1-6) [1]: ");
         let _ = io::stdout().flush();
 
         let mut input = String::new();
@@ -144,13 +147,19 @@ fn choose_default_model() -> String {
 
         let input = input.trim();
         if input.is_empty() || input == "1" {
-            return "MiniMax-M2.1".to_string();
+            return "MiniMax-M2.5".to_string();
         } else if input == "2" {
-            return "MiniMax-Text-01".to_string();
+            return "MiniMax-M2.5-lightning".to_string();
         } else if input == "3" {
+            return "MiniMax-M2.1".to_string();
+        } else if input == "4" {
+            return "MiniMax-M2".to_string();
+        } else if input == "5" {
+            return "MiniMax-Text-01".to_string();
+        } else if input == "6" {
             return "MiniMax-Coding-01".to_string();
         } else {
-            println!("Invalid choice. Please enter 1, 2, or 3.");
+            println!("Invalid choice. Please enter 1, 2, 3, 4, 5, or 6.");
         }
     }
 }
@@ -328,7 +337,7 @@ mod tests {
         // Test that config content is properly formatted
         let base_url = "https://api.minimax.io";
         let api_key = "test-key-12345";
-        let default_model = "MiniMax-M2.1";
+        let default_model = "MiniMax-M2.5";
         let allow_shell = true;
 
         let config = format!(
@@ -368,7 +377,7 @@ exponential_base = 2.0
 
         assert!(config.contains("api_key = \"test-key-12345\""));
         assert!(config.contains("base_url = \"https://api.minimax.io\""));
-        assert!(config.contains("default_text_model = \"MiniMax-M2.1\""));
+        assert!(config.contains("default_text_model = \"MiniMax-M2.5\""));
         assert!(config.contains("allow_shell = true"));
     }
 }

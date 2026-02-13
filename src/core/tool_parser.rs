@@ -1,9 +1,9 @@
 //! Legacy parser for text-based tool calls from `MiniMax` API.
 //!
-//! The Anthropic-compatible flow uses structured `tool_use` blocks, so the
+//! The current compatibility flow uses structured `tool_use` blocks, so the
 //! engine no longer invokes this parser. It is kept for reference/debugging.
 //!
-//! `MiniMax` M2.1 outputs tool calls as text in various formats:
+//! `MiniMax` outputs tool calls as text in various formats:
 //! ```text
 //! [TOOL_CALL]
 //! {tool => "tool_name", args => {...}}

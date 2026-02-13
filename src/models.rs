@@ -1,4 +1,4 @@
-//! API request/response models for `MiniMax` and Anthropic-compatible endpoints.
+//! API request/response models for `MiniMax` endpoints.
 
 use serde::{Deserialize, Serialize};
 
@@ -119,17 +119,33 @@ pub struct Usage {
 #[must_use]
 pub fn context_window_for_model(model: &str) -> Option<u32> {
     let lower = model.to_lowercase();
+    // MiniMax M2.5 series (2M context)
+    if lower.contains("minimax-m2.5") || lower.contains("minimax-2.5") || lower.contains("m2.5") {
+        return Some(2_000_000);
+    }
+    // MiniMax M2.1 (1M context)
     if lower.contains("minimax-m2.1") || lower.contains("m2.1") {
         return Some(1_000_000);
     }
+    // MiniMax M2 (efficient agentic model - assume similar to M2.1)
+    if lower.contains("minimax-m2") && !lower.contains("2.1") && !lower.contains("2.5") {
+        return Some(1_000_000);
+    }
+    // MiniMax Text-01 (256K context)
     if lower.contains("minimax-text-01") {
         return Some(256_000);
     }
+    // MiniMax Coding-01 (128K context)
     if lower.contains("minimax-coding-01") {
         return Some(128_000);
     }
+    // Claude models
     if lower.contains("claude") {
         return Some(200_000);
+    }
+    // Gemini models
+    if lower.contains("gemini") {
+        return Some(2_000_000);
     }
     None
 }
@@ -180,7 +196,7 @@ pub enum ContentBlockStart {
     },
 }
 
-// Variant names match Anthropic API spec, suppressing style warning
+// Variant names match the compatibility API schema, suppressing style warning
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
@@ -200,4 +216,27 @@ pub enum Delta {
 pub struct MessageDelta {
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context_window_for_model;
+
+    #[test]
+    fn maps_minimax_m2_5_and_aliases() {
+        assert_eq!(context_window_for_model("MiniMax-M2.5"), Some(2_000_000));
+        assert_eq!(context_window_for_model("MiniMax-2.5"), Some(2_000_000));
+        assert_eq!(context_window_for_model("m2.5"), Some(2_000_000));
+        assert_eq!(
+            context_window_for_model("MiniMax-M2.5-lightning"),
+            Some(2_000_000)
+        );
+    }
+
+    #[test]
+    fn maps_minimax_m2_and_m2_1() {
+        assert_eq!(context_window_for_model("MiniMax-M2.1"), Some(1_000_000));
+        assert_eq!(context_window_for_model("MiniMax-M2"), Some(1_000_000));
+        assert_eq!(context_window_for_model("m2.1"), Some(1_000_000));
+    }
 }

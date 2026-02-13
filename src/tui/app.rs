@@ -291,6 +291,12 @@ pub struct App {
     pub queued_draft: Option<QueuedMessage>,
     /// Start time for current turn
     pub turn_started_at: Option<Instant>,
+    /// Runtime API turn id when linked to background runtime thread.
+    pub runtime_turn_id: Option<String>,
+    /// Runtime API turn status when linked to background runtime thread.
+    pub runtime_turn_status: Option<String>,
+    /// Recent background tasks for footer/status display.
+    pub task_panel: Vec<TaskPanelEntry>,
     /// Last prompt token usage
     pub last_prompt_tokens: Option<u32>,
     /// Last completion token usage
@@ -327,6 +333,16 @@ pub struct App {
 pub struct QueuedMessage {
     pub display: String,
     pub skill_instruction: Option<String>,
+}
+
+/// Lightweight task panel row used by the TUI footer/status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskPanelEntry {
+    pub id: String,
+    pub status: String,
+    pub prompt_summary: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
 }
 
 /// Source of a pinned message.
@@ -432,7 +448,9 @@ impl App {
         // Check if API key exists
         let needs_onboarding = !has_api_key(config);
         let settings = Settings::load().unwrap_or_else(|_| Settings::default());
-        let auto_compact = settings.auto_compact;
+        let auto_compact = config
+            .auto_compact_enabled()
+            .unwrap_or(settings.auto_compact);
         let show_thinking = settings.show_thinking;
         let show_tool_details = settings.show_tool_details;
         let max_input_history = settings.max_input_history;
@@ -572,6 +590,9 @@ impl App {
             queued_messages: VecDeque::new(),
             queued_draft: None,
             turn_started_at: None,
+            runtime_turn_id: None,
+            runtime_turn_status: None,
+            task_panel: Vec::new(),
             last_prompt_tokens: None,
             last_completion_tokens: None,
             last_usage_at: None,
@@ -1183,6 +1204,20 @@ impl App {
         }
     }
 
+    /// Get task summary for footer display.
+    pub fn task_summary(&self) -> String {
+        if self.task_panel.is_empty() {
+            return String::new();
+        }
+        let running = self
+            .task_panel
+            .iter()
+            .filter(|task| matches!(task.status.as_str(), "queued" | "running"))
+            .count();
+        let total = self.task_panel.len();
+        format!("[{running}/{total}]")
+    }
+
     // === Pinned Messages ===
 
     const MAX_PINS: usize = 5;
@@ -1257,8 +1292,31 @@ pub enum AppAction {
     },
     SendMessage(String),
     ListSubAgents,
+    GetSubAgent {
+        agent_id: String,
+        block: bool,
+        timeout_ms: u64,
+    },
+    CancelSubAgent {
+        agent_id: String,
+    },
+    TaskAdd {
+        prompt: String,
+    },
+    TaskList,
+    TaskShow {
+        id: String,
+    },
+    TaskCancel {
+        id: String,
+    },
+    CleanSubAgents {
+        max_age_ms: u64,
+    },
     /// Trigger manual context compaction
     CompactContext,
+    /// Toggle automatic context compaction.
+    SetAutoCompact(bool),
     /// Open the session picker modal
     OpenSessionPicker,
     /// Open the model picker modal

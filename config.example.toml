@@ -22,7 +22,7 @@ base_url = "https://api.minimax.io" # US/global endpoint (default)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Default Models
 # ─────────────────────────────────────────────────────────────────────────────────
-default_text_model = "MiniMax-M2.1"
+default_text_model = "MiniMax-M2.5"
 
 # Parsed but currently unused (reserved for future versions):
 # default_image_model = "image-01"
@@ -71,14 +71,17 @@ max_delay = 60.0
 exponential_base = 2.0
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# Context Compaction (PLANNED - not yet implemented)
+# Context Compaction
 # ─────────────────────────────────────────────────────────────────────────────────
-# [compaction]
-# enabled = false                  # Enable auto-compaction
-# token_threshold = 50000          # Trigger compaction above this token estimate
-# message_threshold = 50           # Or above this message count
-# model = "MiniMax-M2.1"           # Model to use for summarization
-# cache_summary = true             # Cache the summary block
+[compaction]
+enabled = false                          # Enable auto-compaction
+# token_threshold = 120000               # Explicit threshold (tokens, estimated)
+# model_auto_compact_token_limit = 1800000 # Optional override for model-derived limit
+message_threshold = 30                   # Trigger when messages exceed this count
+keep_recent = 6                          # Keep this many recent messages unsummarized
+# model = "MiniMax-M2.5"                 # Optional summarization model override
+cache_summary = true                     # Cache the summary block
+# compact_prompt = "Summarize key decisions and pending tasks. Keep under 400 words."
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # RLM Sandbox Configuration
@@ -106,7 +109,7 @@ player_temperature = 0.7         # Temperature for player implementation
 # Use a separate API key and endpoint for coding tasks
 # api_key_2 = "YOUR_CODING_API_KEY"           # Optional: separate coding API key
 # base_url_2 = "https://api.minimax.io"       # Optional: separate coding endpoint
-# default_coding_model = "MiniMax-M2.1-Coding" # Model for coding tasks
+# default_coding_model = "MiniMax-M2.5-Coding" # Model for coding tasks
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Profile Example (for multiple environments)

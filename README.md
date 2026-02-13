@@ -3,7 +3,7 @@
 [![CI](https://github.com/Hmbown/MiniMax-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/Hmbown/MiniMax-CLI/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/minimax-cli)](https://crates.io/crates/minimax-cli)
 
-Unofficial terminal UI (TUI) + CLI for the [MiniMax platform](https://platform.minimax.io): chat with **MiniMax-M2.1**, run an approval-gated tool-using agent, and generate media (images, video, music, TTS).
+Unofficial terminal UI (TUI) + CLI for the [MiniMax platform](https://platform.minimax.io): chat with **MiniMax-M2.5**, run an approval-gated tool-using agent, and generate media (images, video, music, TTS).
 
 Not affiliated with MiniMax Inc.
 
@@ -51,7 +51,7 @@ On first run, the TUI can prompt for your API key and save it to `~/.minimax/con
 ```toml
 # ~/.minimax/config.toml
 api_key = "YOUR_MINIMAX_API_KEY"   # must be non-empty
-default_text_model = "MiniMax-M2.1" # optional
+default_text_model = "MiniMax-M2.5" # optional
 allow_shell = false                 # optional
 max_subagents = 3                   # optional (1-5)
 ```
@@ -63,6 +63,7 @@ Useful environment variables:
 - `MINIMAX_PROFILE` (selects `[profiles.<name>]` from the config; errors if missing)
 - `MINIMAX_CONFIG_PATH` (override config path)
 - `MINIMAX_MCP_CONFIG`, `MINIMAX_SKILLS_DIR`, `MINIMAX_NOTES_PATH`, `MINIMAX_MEMORY_PATH`, `MINIMAX_ALLOW_SHELL`, `MINIMAX_MAX_SUBAGENTS`
+- `MINIMAX_AUTO_COMPACT`, `MINIMAX_COMPACTION_TOKEN_THRESHOLD`, `MINIMAX_COMPACTION_MESSAGE_THRESHOLD`, `MINIMAX_COMPACTION_KEEP_RECENT`, `MINIMAX_COMPACT_PROMPT`, `MINIMAX_AUTO_COMPACT_TOKEN_LIMIT`
 
 See `config.example.toml` and `docs/CONFIGURATION.md` for a full reference.
 
@@ -86,9 +87,40 @@ MiniMax CLI exposes tools to the model: file read/write/patching, shell executio
 - **Workspace boundary**: file tools are restricted to `--workspace` unless you enable `/trust` (YOLO enables trust automatically).
 - **Approvals**: the TUI requests approval depending on mode and tool category (file writes, shell, paid media).
 - **Web search**: `web_search` uses DuckDuckGo HTML results and is auto-approved.
+- **Runtime parity tools**: `web.run`, `multi_tool_use.parallel`, `request_user_input`, `weather`, `finance`, `sports`, `time`, and `calculator` are available in agent-capable modes.
+- **Background shell jobs**: `exec_shell` supports `background=true`; inspect with `exec_shell_list` and clean old tasks with `exec_shell_clean` (or use `/jobs` in the TUI). Metadata persists at `<workspace>/.minimax/state/background_jobs.json`. On startup/session sync/`/reload`, jobs are restored; any previously `running` job is reclassified as `orphaned` with a reason because process handles cannot be reattached across restart.
+- **Sub-agent registry**: sub-agent metadata persists at `<workspace>/.minimax/state/subagents.json`. On startup/session sync/`/reload`, registry entries are restored; any previously `running` sub-agent is reclassified as `failed` with reason `interrupted: previous MiniMax session ended before completion`.
+- **Runtime restore status**: the UI emits `Restored runtime state (...)` summaries during startup/session sync/`/reload`, plus `Runtime state warning: ...` when persisted state files are unreadable/corrupt (soft-fail, no crash).
 - **Media tools**: image/video/music/TTS tools make paid API calls and write real files.
 - **Skills**: reusable workflows stored as `SKILL.md` directories (default: `~/.minimax/skills`). Use `/skills` and `/skill <name>` (this repo includes examples under `skills/`).
 - **MCP**: load external tool servers via `~/.minimax/mcp.json` (supports `servers` and `mcpServers`). MCP tools currently execute without TUI approval prompts, so only enable servers you trust. See `docs/MCP.md`.
+
+### Runtime API Server
+
+Run a local runtime HTTP/SSE server:
+
+```bash
+minimax serve --http --host 127.0.0.1 --port 7878 --workers 2
+```
+
+Thread/task state persists under `~/.minimax/tasks` (override with `MINIMAX_TASKS_DIR`).
+
+Core endpoints:
+- `GET /health`
+- `GET /v1/sessions`
+- `POST /v1/stream`
+- `GET/POST /v1/threads`
+- `GET /v1/threads/{id}`
+- `POST /v1/threads/{id}/resume`
+- `POST /v1/threads/{id}/fork`
+- `POST /v1/threads/{id}/turns`
+- `POST /v1/threads/{id}/turns/{turn_id}/steer`
+- `POST /v1/threads/{id}/turns/{turn_id}/interrupt`
+- `POST /v1/threads/{id}/compact`
+- `GET /v1/threads/{id}/events`
+- `GET/POST /v1/tasks`
+- `GET /v1/tasks/{id}`
+- `POST /v1/tasks/{id}/cancel`
 
 ## RLM
 
@@ -155,6 +187,7 @@ minimax --workspace . smoke-media --confirm
 - `docs/README.md`
 - `docs/CONFIGURATION.md`
 - `docs/MCP.md`
+- `docs/RUNTIME_API.md`
 - `docs/ARCHITECTURE.md`
 - `CONTRIBUTING.md`
 

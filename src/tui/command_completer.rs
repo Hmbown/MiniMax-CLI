@@ -490,7 +490,7 @@ pub fn get_command_hint(input: &str) -> Option<&'static str> {
         let after_model = trimmed.strip_prefix("/model ").unwrap_or("").trim();
         if after_model.is_empty() {
             return Some(
-                "Available: MiniMax-M2.1, MiniMax-Text-01, gemini-2.5-flash, claude-sonnet-4-20250514",
+                "Available: MiniMax-M2.5, MiniMax-M2.5-lightning, MiniMax-M2.1, MiniMax-M2, MiniMax-Text-01, MiniMax-Coding-01",
             );
         }
     }

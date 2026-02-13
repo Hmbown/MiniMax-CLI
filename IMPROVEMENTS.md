@@ -116,7 +116,7 @@ This document summarizes the improvements made to bring MiniMax CLI to the level
   1. Welcome message
   2. Region selection (US or China base URL)
   3. API key input with validation
-  4. Default model selection (MiniMax-M2.1, MiniMax-Text-01, MiniMax-Coding-01)
+  4. Default model selection (MiniMax-M2.5, MiniMax-M2.1, MiniMax-Text-01, MiniMax-Coding-01)
   5. Default mode selection (Normal, Agent, YOLO)
   6. Shell permissions (yes/no)
   7. Summary and confirmation
@@ -178,7 +178,8 @@ This document summarizes the improvements made to bring MiniMax CLI to the level
 ### Enhanced `/model` Command
 - Interactive picker when called without arguments
 - Shows available MiniMax models with descriptions:
-  - MiniMax-M2.1 (general purpose)
+  - MiniMax-M2.5 (latest general purpose)
+  - MiniMax-M2.1 (legacy general purpose)
   - MiniMax-Text-01 (long context)
   - MiniMax-Coding-01 (code generation)
 - Validates model names when called with arguments

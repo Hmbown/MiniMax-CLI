@@ -1,4 +1,4 @@
-//! HTTP clients for `MiniMax` and Anthropic-compatible APIs.
+//! HTTP clients for `MiniMax` APIs.
 //!
 //! This module centralizes retry behavior, base URLs, and streaming helpers
 //! for the `MiniMax` CLI's network requests.
@@ -25,10 +25,10 @@ pub struct MiniMaxClient {
     retry: RetryPolicy,
 }
 
-/// Client for Anthropic-compatible API requests.
+/// Client for MiniMax text API requests using MiniMax's compatibility wire format.
 #[derive(Clone)]
 #[must_use]
-pub struct AnthropicClient {
+pub struct MiniMaxTextClient {
     http_client: reqwest::Client,
     base_url: String,
     retry: RetryPolicy,
@@ -235,37 +235,37 @@ impl MiniMaxClient {
     }
 }
 
-// === AnthropicClient ===
+// === MiniMaxTextClient ===
 
-impl AnthropicClient {
-    /// Create an Anthropic-compatible client using the default model.
+impl MiniMaxTextClient {
+    /// Create a MiniMax text client using the default model.
     pub fn new(config: &Config) -> Result<Self> {
         let model = config
             .default_text_model
             .clone()
-            .unwrap_or_else(|| "MiniMax-M2.1".to_string());
+            .unwrap_or_else(|| "MiniMax-M2.5".to_string());
         Self::with_model(config, model)
     }
 
-    /// Create an Anthropic-compatible client pinned to a specific model.
+    /// Create a MiniMax text client pinned to a specific model.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// # use crate::client::AnthropicClient;
+    /// # use crate::client::MiniMaxTextClient;
     /// # use crate::config::Config;
     /// # fn example(config: &Config) -> anyhow::Result<()> {
-    /// let client = AnthropicClient::with_model(config, "MiniMax-M2.1".to_string())?;
+    /// let client = MiniMaxTextClient::with_model(config, "MiniMax-M2.5".to_string())?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn with_model(config: &Config, model: String) -> Result<Self> {
-        let base_url = config.anthropic_base_url();
-        let api_key = config.anthropic_api_key()?;
+        let base_url = config.minimax_text_base_url();
+        let api_key = config.minimax_text_api_key()?;
         let retry = config.retry_policy();
         let is_minimax = is_minimax_base_url(&base_url);
 
-        logging::info(format!("Compatible base URL: {base_url}"));
+        logging::info(format!("MiniMax text API base URL: {base_url}"));
         logging::info(format!(
             "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
@@ -300,7 +300,7 @@ impl AnthropicClient {
         &self.default_model
     }
 
-    /// Create a non-streaming Anthropic-compatible message request.
+    /// Create a non-streaming MiniMax text message request.
     pub async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
         let url = format!("{}/v1/messages", self.base_url);
         let mut request = request;
@@ -311,7 +311,7 @@ impl AnthropicClient {
         Ok(response.json::<MessageResponse>().await?)
     }
 
-    /// Create a streaming Anthropic-compatible message request.
+    /// Create a streaming MiniMax text message request.
     pub async fn create_message_stream(
         &self,
         request: MessageRequest,
@@ -429,9 +429,9 @@ fn parse_sse_stream(
 
 // === Trait Implementations ===
 
-impl LlmClient for AnthropicClient {
+impl LlmClient for MiniMaxTextClient {
     fn provider_name(&self) -> &'static str {
-        "anthropic"
+        "minimax"
     }
 
     fn model(&self) -> &str {
@@ -440,7 +440,7 @@ impl LlmClient for AnthropicClient {
 
     async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
         // Delegate to existing method
-        AnthropicClient::create_message(self, request).await
+        MiniMaxTextClient::create_message(self, request).await
     }
 
     async fn create_message_stream(&self, request: MessageRequest) -> Result<StreamEventBox> {

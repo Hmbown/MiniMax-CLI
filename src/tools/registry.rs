@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::client::AnthropicClient;
+use crate::client::MiniMaxTextClient;
 use crate::duo::SharedDuoSession;
 use crate::models::Tool;
 use crate::rlm::SharedRlmSession;
@@ -264,13 +264,18 @@ impl ToolRegistryBuilder {
     #[must_use]
     pub fn with_shell_tools(self) -> Self {
         use super::shell::{
-            ExecShellInteractTool, ExecShellKillTool, ExecShellTool, ExecShellWaitTool,
+            ExecShellCleanTool, ExecShellInteractTool, ExecShellKillTool, ExecShellListTool,
+            ExecShellTool, ExecShellWaitTool,
         };
         self.with_tool(Arc::new(ExecShellTool))
             .with_tool(Arc::new(ExecShellWaitTool::new("exec_shell_wait")))
             .with_tool(Arc::new(ExecShellWaitTool::new("exec_wait")))
             .with_tool(Arc::new(ExecShellKillTool::new("exec_shell_kill")))
             .with_tool(Arc::new(ExecShellKillTool::new("exec_kill")))
+            .with_tool(Arc::new(ExecShellListTool::new("exec_shell_list")))
+            .with_tool(Arc::new(ExecShellListTool::new("exec_list")))
+            .with_tool(Arc::new(ExecShellCleanTool::new("exec_shell_clean")))
+            .with_tool(Arc::new(ExecShellCleanTool::new("exec_clean")))
             .with_tool(Arc::new(ExecShellInteractTool::new("exec_shell_interact")))
             .with_tool(Arc::new(ExecShellInteractTool::new("exec_interact")))
     }
@@ -416,7 +421,30 @@ impl ToolRegistryBuilder {
             .with_plan_tool(plan_state)
             .with_artifact_tools()
             .with_execution_tools()
+            .with_runtime_automation_tools()
             .with_minimax_tools()
+    }
+
+    /// Include runtime automation and utility tools used by server/agent flows.
+    #[must_use]
+    pub fn with_runtime_automation_tools(self) -> Self {
+        use super::calculator::CalculatorTool;
+        use super::finance::FinanceTool;
+        use super::parallel::MultiToolUseParallelTool;
+        use super::sports::SportsTool;
+        use super::time::TimeTool;
+        use super::user_input::RequestUserInputTool;
+        use super::weather::WeatherTool;
+        use super::web_run::WebRunTool;
+
+        self.with_tool(Arc::new(WebRunTool))
+            .with_tool(Arc::new(MultiToolUseParallelTool))
+            .with_tool(Arc::new(RequestUserInputTool))
+            .with_tool(Arc::new(WeatherTool))
+            .with_tool(Arc::new(FinanceTool))
+            .with_tool(Arc::new(SportsTool))
+            .with_tool(Arc::new(TimeTool))
+            .with_tool(Arc::new(CalculatorTool))
     }
 
     /// Include RLM tools for context execution and sub-queries.
@@ -424,7 +452,7 @@ impl ToolRegistryBuilder {
     pub fn with_rlm_tools(
         self,
         session: SharedRlmSession,
-        client: Option<AnthropicClient>,
+        client: Option<MiniMaxTextClient>,
         model: String,
     ) -> Self {
         self.with_tool(Arc::new(super::rlm::RlmExecTool::new(session.clone())))

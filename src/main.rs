@@ -22,6 +22,7 @@ mod hooks;
 mod llm_client;
 mod logging;
 mod mcp;
+mod mcp_server;
 mod models;
 mod modules;
 mod palette;
@@ -31,12 +32,15 @@ mod project_doc;
 mod prompts;
 mod responses_api_proxy;
 mod rlm;
+mod runtime_api;
+mod runtime_threads;
 mod sandbox;
 mod session_manager;
 mod settings;
 mod skills;
 mod smoke;
 mod snippets;
+mod task_manager;
 mod tools;
 mod tui;
 mod ui;
@@ -52,7 +56,7 @@ use crate::llm_client::LlmClient;
     version,
     about = "MiniMax CLI - AI Coding Assistant",
     long_about = "MiniMax CLI - Professional AI Coding Assistant\n\n\
-    ✨ MiniMax M2.1: General-purpose AI chat\n\
+    ✨ MiniMax M2.5: General-purpose AI chat\n\
     🔷 MiniMax Coding API: Specialized code generation and review\n\
     📚 RLM Mode: Recursive Language Model with context management\n\
     🎯 Duo Mode: Player-Coach adversarial cooperation for autocoding\n\n\
@@ -204,6 +208,8 @@ enum Commands {
     Features(FeaturesCli),
     /// Run a command inside the sandbox
     Sandbox(SandboxArgs),
+    /// Run a local server (MCP stdio or runtime HTTP/SSE API)
+    Serve(ServeArgs),
     /// Recursive Language Model mode - context loading, searching, and chunking
     Rlm(RlmCommand),
     /// Duo autocoding mode - Player-Coach adversarial cooperation
@@ -274,6 +280,25 @@ enum FeaturesSubcommand {
 struct SandboxArgs {
     #[command(subcommand)]
     command: SandboxCommand,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ServeArgs {
+    /// Start MCP server over stdio
+    #[arg(long)]
+    mcp: bool,
+    /// Start runtime HTTP/SSE API server
+    #[arg(long)]
+    http: bool,
+    /// Bind host for HTTP server (default localhost)
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    /// Bind port for HTTP server
+    #[arg(long, default_value_t = 7878)]
+    port: u16,
+    /// Background task worker count (1-8)
+    #[arg(long, default_value_t = 2)]
+    workers: usize,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -610,6 +635,31 @@ async fn main() -> Result<()> {
                 run_features_command(&config, command)
             }
             Commands::Sandbox(args) => run_sandbox_command(args),
+            Commands::Serve(args) => {
+                let workspace = cli.workspace.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+                if args.mcp && args.http {
+                    anyhow::bail!("Choose exactly one server mode: --mcp or --http");
+                }
+                if args.mcp {
+                    mcp_server::run_mcp_server(workspace)
+                } else if args.http {
+                    let config = load_config_from_cli(&cli)?;
+                    runtime_api::run_http_server(
+                        config,
+                        workspace,
+                        runtime_api::RuntimeApiOptions {
+                            host: args.host,
+                            port: args.port,
+                            workers: args.workers.clamp(1, 8),
+                        },
+                    )
+                    .await
+                } else {
+                    anyhow::bail!("No server mode specified. Use --mcp or --http.")
+                }
+            }
             Commands::Modes => {
                 run_modes();
                 Ok(())
@@ -627,7 +677,7 @@ async fn main() -> Result<()> {
                     .model
                     .clone()
                     .or_else(|| config.default_text_model.clone())
-                    .unwrap_or_else(|| "MiniMax-M2.1".to_string());
+                    .unwrap_or_else(|| "MiniMax-M2.5".to_string());
                 if args.auto || cli.yolo {
                     run_exec_agent(&config, &model, &args.prompt).await
                 } else {
@@ -658,7 +708,7 @@ async fn main() -> Result<()> {
     let model = config
         .default_text_model
         .clone()
-        .unwrap_or_else(|| "MiniMax-M2.1".to_string());
+        .unwrap_or_else(|| "MiniMax-M2.5".to_string());
     let max_subagents = cli
         .max_subagents
         .map_or_else(|| config.max_subagents(), |value| value.clamp(1, 5));
@@ -912,7 +962,7 @@ fn run_modes() {
             .bold()
     );
     println!("   Run: {}", "minimax".truecolor(blue_r, blue_g, blue_b));
-    println!("   General-purpose AI chat powered by MiniMax M2.1");
+    println!("   General-purpose AI chat powered by MiniMax M2.5");
     println!();
 
     // RLM Mode
@@ -1565,11 +1615,11 @@ async fn run_doctor() {
 
 /// Test API connectivity by making a minimal request
 async fn test_api_connectivity() -> Result<String> {
-    use crate::client::AnthropicClient;
+    use crate::client::MiniMaxTextClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
     let config = Config::load(None, None)?;
-    let client = AnthropicClient::new(&config)?;
+    let client = MiniMaxTextClient::new(&config)?;
     let model = client.model().to_string();
 
     // Minimal request: single word prompt, 1 max token
@@ -1726,10 +1776,10 @@ fn init_project() -> Result<()> {
 }
 
 async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> {
-    use crate::client::AnthropicClient;
+    use crate::client::MiniMaxTextClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
 
-    let client = AnthropicClient::new(config)?;
+    let client = MiniMaxTextClient::new(config)?;
 
     let request = MessageRequest {
         model: model.to_string(),
@@ -1765,7 +1815,7 @@ async fn run_one_shot(config: &Config, model: &str, prompt: &str) -> Result<()> 
 // ─── Review subcommand ───────────────────────────────────────────────────
 
 async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
-    use crate::client::AnthropicClient;
+    use crate::client::MiniMaxTextClient;
     use crate::models::{ContentBlock, Message, MessageRequest, SystemPrompt};
 
     let diff = collect_diff(&args)?;
@@ -1776,7 +1826,7 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     let model = args
         .model
         .or_else(|| config.default_text_model.clone())
-        .unwrap_or_else(|| "MiniMax-M2.1".to_string());
+        .unwrap_or_else(|| "MiniMax-M2.5".to_string());
 
     let system = SystemPrompt::Text(
         "You are a senior code reviewer. Focus on bugs, risks, behavioral regressions, \
@@ -1787,7 +1837,7 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     let user_prompt =
         format!("Review the following diff and provide feedback:\n\n{diff}\n\nEnd of diff.");
 
-    let client = AnthropicClient::new(config)?;
+    let client = MiniMaxTextClient::new(config)?;
     let request = MessageRequest {
         model,
         messages: vec![Message {
@@ -1850,7 +1900,7 @@ fn collect_diff(args: &ReviewArgs) -> Result<String> {
 // ─── Exec subcommand (agentic headless) ──────────────────────────────────
 
 async fn run_exec_agent(config: &Config, model: &str, prompt: &str) -> Result<()> {
-    use crate::client::AnthropicClient;
+    use crate::client::MiniMaxTextClient;
     use crate::models::{ContentBlock, Message, MessageRequest};
     use crate::tools::ToolRegistryBuilder;
     use crate::tools::spec::ToolContext;
@@ -1865,7 +1915,7 @@ async fn run_exec_agent(config: &Config, model: &str, prompt: &str) -> Result<()
         .with_full_agent_tools(true, todo_list, plan_state)
         .build(context);
 
-    let client = AnthropicClient::new(config)?;
+    let client = MiniMaxTextClient::new(config)?;
     let api_tools = registry.to_api_tools();
 
     let mut messages = vec![Message {

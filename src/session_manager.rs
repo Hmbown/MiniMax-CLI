@@ -20,6 +20,14 @@ use uuid::Uuid;
 /// Maximum number of sessions to retain
 const MAX_SESSIONS: usize = 50;
 
+/// Return the default sessions directory (`~/.minimax/sessions`).
+pub fn default_sessions_dir() -> std::io::Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
+    })?;
+    Ok(home.join(".minimax").join("sessions"))
+}
+
 /// Session metadata stored with each saved session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -70,10 +78,7 @@ impl SessionManager {
 
     /// Create a `SessionManager` using the default location (~/.minimax/sessions)
     pub fn default_location() -> std::io::Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "Home directory not found")
-        })?;
-        Self::new(home.join(".minimax").join("sessions"))
+        Self::new(default_sessions_dir()?)
     }
 
     /// Save a session to disk

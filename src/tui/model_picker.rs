@@ -26,21 +26,39 @@ pub struct ModelInfo {
 /// Available MiniMax models
 pub const AVAILABLE_MODELS: &[ModelInfo] = &[
     ModelInfo {
+        id: "MiniMax-M2.5",
+        name: "MiniMax 2.5",
+        description: "Latest generation model with enhanced reasoning, tool calling, and 2M context",
+        capabilities: "Text, reasoning, agents, office productivity, code",
+    },
+    ModelInfo {
+        id: "MiniMax-M2.5-lightning",
+        name: "MiniMax 2.5 Lightning",
+        description: "Fast version of M2.5 for quick responses with same capabilities",
+        capabilities: "Fast text, reasoning, agents, code",
+    },
+    ModelInfo {
         id: "MiniMax-M2.1",
         name: "MiniMax M2.1",
-        description: "General-purpose large language model with strong reasoning",
-        capabilities: "Text generation, reasoning, analysis",
+        description: "Polyglot programming mastery with precision code refactoring",
+        capabilities: "Text generation, reasoning, analysis, code",
+    },
+    ModelInfo {
+        id: "MiniMax-M2",
+        name: "MiniMax M2",
+        description: "Efficient agentic model for coding (10B active params, 230B total)",
+        capabilities: "Code generation, agents, tool use",
     },
     ModelInfo {
         id: "MiniMax-Text-01",
         name: "MiniMax Text 01",
-        description: "Text-optimized model for natural language tasks",
+        description: "Text-optimized model for natural language tasks (256K context)",
         capabilities: "Text generation, summarization, Q&A",
     },
     ModelInfo {
         id: "MiniMax-Coding-01",
         name: "MiniMax Coding 01",
-        description: "Code-specialized model for programming tasks",
+        description: "Code-specialized model for programming tasks (128K context)",
         capabilities: "Code generation, debugging, review",
     },
 ];
@@ -296,11 +314,19 @@ impl ModalView for ModelPicker {
 
 /// Validate a model name against available models
 pub fn validate_model(model_name: &str) -> Option<&'static ModelInfo> {
-    AVAILABLE_MODELS.iter().find(|m| {
-        m.id.eq_ignore_ascii_case(model_name)
-            || m.name.eq_ignore_ascii_case(model_name)
-            || m.id.to_lowercase() == model_name.to_lowercase()
-    })
+    let normalized = model_name.trim().to_ascii_lowercase();
+    let canonical = match normalized.as_str() {
+        "minimax-2.5" | "minimax-m2.5" | "m2.5" => "MiniMax-M2.5",
+        "minimax-2.5-lightning" | "minimax-m2.5-lightning" | "m2.5-lightning" | "2.5-lightning" => {
+            "MiniMax-M2.5-lightning"
+        }
+        "minimax-m2" | "m2" => "MiniMax-M2",
+        _ => model_name,
+    };
+
+    AVAILABLE_MODELS
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(canonical) || m.name.eq_ignore_ascii_case(canonical))
 }
 
 /// Get the canonical model ID for a model name
@@ -315,16 +341,23 @@ mod tests {
 
     #[test]
     fn test_validate_model_exact_match() {
-        let model = validate_model("MiniMax-M2.1");
+        let model = validate_model("MiniMax-M2.5");
         assert!(model.is_some());
-        assert_eq!(model.unwrap().id, "MiniMax-M2.1");
+        assert_eq!(model.unwrap().id, "MiniMax-M2.5");
     }
 
     #[test]
     fn test_validate_model_case_insensitive() {
-        let model = validate_model("minimax-m2.1");
+        let model = validate_model("minimax-m2.5");
         assert!(model.is_some());
-        assert_eq!(model.unwrap().id, "MiniMax-M2.1");
+        assert_eq!(model.unwrap().id, "MiniMax-M2.5");
+    }
+
+    #[test]
+    fn test_validate_model_alias() {
+        let model = validate_model("MiniMax-2.5");
+        assert!(model.is_some());
+        assert_eq!(model.unwrap().id, "MiniMax-M2.5");
     }
 
     #[test]
@@ -336,8 +369,8 @@ mod tests {
     #[test]
     fn test_resolve_model_id() {
         assert_eq!(
-            resolve_model_id("MiniMax-M2.1"),
-            Some("MiniMax-M2.1".to_string())
+            resolve_model_id("MiniMax-2.5"),
+            Some("MiniMax-M2.5".to_string())
         );
         assert_eq!(
             resolve_model_id("minimax-text-01"),
@@ -347,23 +380,21 @@ mod tests {
 
     #[test]
     fn test_model_picker_navigation() {
-        let mut picker = ModelPicker::new("MiniMax-M2.1".to_string());
+        let mut picker = ModelPicker::new("MiniMax-M2.5".to_string());
+        assert!(!AVAILABLE_MODELS.is_empty());
+        let last_index = AVAILABLE_MODELS.len() - 1;
         assert_eq!(picker.selected, 0);
 
-        // Move down
-        picker.select_down();
-        assert_eq!(picker.selected, 1);
-
-        // Move down again
-        picker.select_down();
-        assert_eq!(picker.selected, 2);
-
-        // Wrap around
+        // Move down through the full list, then wrap to top.
+        for expected in 1..=last_index {
+            picker.select_down();
+            assert_eq!(picker.selected, expected);
+        }
         picker.select_down();
         assert_eq!(picker.selected, 0);
 
-        // Move up
+        // Move up from top and wrap to last.
         picker.select_up();
-        assert_eq!(picker.selected, 2);
+        assert_eq!(picker.selected, last_index);
     }
 }

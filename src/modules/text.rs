@@ -1,4 +1,4 @@
-//! Text chat workflows for `MiniMax` and Anthropic-compatible APIs.
+//! Text chat workflows for `MiniMax` APIs.
 
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -16,7 +16,7 @@ use rustyline::validate::Validator;
 use rustyline::{Context as RlContext, Editor, Helper};
 use serde_json::{Value, json};
 
-use crate::client::{AnthropicClient, MiniMaxClient};
+use crate::client::{MiniMaxClient, MiniMaxTextClient};
 use crate::models::{
     CacheControl, ContentBlock, ContentBlockStart, Delta, Message, MessageRequest, StreamEvent,
     SystemBlock, SystemPrompt, Tool, Usage,
@@ -45,7 +45,10 @@ pub struct TextChatOptions {
 
 // === Public API ===
 
-pub async fn run_anthropic_chat(client: &AnthropicClient, options: TextChatOptions) -> Result<()> {
+pub async fn run_minimax_text_chat(
+    client: &MiniMaxTextClient,
+    options: TextChatOptions,
+) -> Result<()> {
     let mut messages: Vec<Message> = Vec::new();
     let mut stats = SessionStats::new();
 
@@ -57,11 +60,11 @@ pub async fn run_anthropic_chat(client: &AnthropicClient, options: TextChatOptio
     );
 
     if let Some(prompt) = options.prompt.as_deref() {
-        process_anthropic_turn(client, &options, &mut messages, prompt, &mut stats).await?;
+        process_minimax_text_turn(client, &options, &mut messages, prompt, &mut stats).await?;
     } else {
         let mut rl = create_editor()?;
         while let Some(line) = read_prompt(&mut rl)? {
-            if handle_line_anthropic(line, client, &options, &mut messages, &mut stats).await? {
+            if handle_line_minimax_text(line, client, &options, &mut messages, &mut stats).await? {
                 break;
             }
         }
@@ -148,8 +151,8 @@ pub fn parse_tool_choice(choice: Option<&str>) -> Result<Option<Value>> {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn process_anthropic_turn(
-    client: &AnthropicClient,
+async fn process_minimax_text_turn(
+    client: &MiniMaxTextClient,
     options: &TextChatOptions,
     messages: &mut Vec<Message>,
     user_input: &str,
@@ -467,7 +470,7 @@ fn matches_exit(input: &str) -> bool {
     matches!(normalized.as_str(), "exit" | "quit" | "q" | "/exit")
 }
 
-fn handle_command_anthropic(
+fn handle_command_minimax_text(
     input: &str,
     messages: &mut Vec<Message>,
     options: Option<&TextChatOptions>,
@@ -740,9 +743,9 @@ fn history_path() -> Option<std::path::PathBuf> {
     })
 }
 
-async fn handle_line_anthropic(
+async fn handle_line_minimax_text(
     line: String,
-    client: &AnthropicClient,
+    client: &MiniMaxTextClient,
     options: &TextChatOptions,
     messages: &mut Vec<Message>,
     stats: &mut SessionStats,
@@ -754,10 +757,10 @@ async fn handle_line_anthropic(
     if matches_exit(input) {
         return Ok(true);
     }
-    if handle_command_anthropic(input, messages, Some(options), stats) {
+    if handle_command_minimax_text(input, messages, Some(options), stats) {
         return Ok(false);
     }
-    if let Err(error) = process_anthropic_turn(client, options, messages, input, stats).await {
+    if let Err(error) = process_minimax_text_turn(client, options, messages, input, stats).await {
         let (red_r, red_g, red_b) = palette::MINIMAX_RED_RGB;
         eprintln!(
             "{} {}",

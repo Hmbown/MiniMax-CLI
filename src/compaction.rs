@@ -13,7 +13,7 @@ use crate::logging;
 use anyhow::Result;
 use std::fmt::Write;
 
-use crate::client::AnthropicClient;
+use crate::client::MiniMaxTextClient;
 use crate::models::{
     CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt, Tool,
 };
@@ -24,8 +24,11 @@ pub struct CompactionConfig {
     pub enabled: bool,
     pub token_threshold: usize,
     pub message_threshold: usize,
-    pub model: String,
+    pub model: Option<String>,
     pub cache_summary: bool,
+    pub compact_prompt: Option<String>,
+    /// Recompute token threshold from active model context window each turn.
+    pub derive_token_threshold_from_model: bool,
     /// Keep this many recent messages unsummarized
     pub keep_recent: usize,
 }
@@ -36,8 +39,10 @@ impl Default for CompactionConfig {
             enabled: true,          // Enable by default for better UX
             token_threshold: 80000, // 80K tokens ~ 320K chars
             message_threshold: 30,  // After 30 messages
-            model: "MiniMax-M2.1".to_string(),
+            model: None,
             cache_summary: true,
+            compact_prompt: None,
+            derive_token_threshold_from_model: false,
             keep_recent: 6, // Keep last 6 messages as-is
         }
     }
@@ -131,9 +136,10 @@ pub fn should_compact(messages: &[Message], config: &CompactionConfig) -> bool {
 }
 
 pub async fn compact_messages(
-    client: &AnthropicClient,
+    client: &MiniMaxTextClient,
     messages: &[Message],
     config: &CompactionConfig,
+    active_model: &str,
 ) -> Result<(Vec<Message>, Option<SystemPrompt>)> {
     if messages.is_empty() {
         return Ok((Vec::new(), None));
@@ -149,7 +155,14 @@ pub async fn compact_messages(
     };
 
     // Create a summary of older messages
-    let summary = create_summary(client, to_summarize, &config.model).await?;
+    let summary_model = config.model.as_deref().unwrap_or(active_model);
+    let summary = create_summary(
+        client,
+        to_summarize,
+        summary_model,
+        config.compact_prompt.as_deref(),
+    )
+    .await?;
 
     // Build new message list with summary as system block
     let summary_block = SystemBlock {
@@ -173,9 +186,10 @@ pub async fn compact_messages(
 }
 
 async fn create_summary(
-    client: &AnthropicClient,
+    client: &MiniMaxTextClient,
     messages: &[Message],
     model: &str,
+    compact_prompt: Option<&str>,
 ) -> Result<String> {
     // Format messages for summarization
     let mut conversation_text = String::new();
@@ -207,16 +221,20 @@ async fn create_summary(
         }
     }
 
+    const DEFAULT_COMPACT_PROMPT: &str = "Summarize the following conversation in a concise but comprehensive way. \
+         Preserve key information, decisions made, and any important context. \
+         Keep it under 500 words.";
+    let prompt = compact_prompt
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(DEFAULT_COMPACT_PROMPT);
+
     let request = MessageRequest {
         model: model.to_string(),
         messages: vec![Message {
             role: "user".to_string(),
             content: vec![ContentBlock::Text {
-                text: format!(
-                    "Summarize the following conversation in a concise but comprehensive way. \
-                     Preserve key information, decisions made, and any important context. \
-                     Keep it under 500 words.\n\n---\n\n{conversation_text}"
-                ),
+                text: format!("{prompt}\n\n---\n\n{conversation_text}"),
                 cache_control: None,
             }],
         }],
@@ -301,17 +319,18 @@ pub fn merge_system_prompts(
 /// If compaction is not needed, returns (messages.clone(), system.clone(), false)
 ///
 /// # Arguments
-/// * `client` - AnthropicClient for making summary API calls
+/// * `client` - MiniMaxTextClient for making summary API calls
 /// * `messages` - Current conversation messages
 /// * `system` - Current system prompt
 /// * `tools` - Current tools (for token estimation)
 /// * `config` - Compaction configuration
 pub async fn maybe_compact(
-    client: &AnthropicClient,
+    client: &MiniMaxTextClient,
     messages: &[Message],
     system: &Option<SystemPrompt>,
     tools: &Option<Vec<Tool>>,
     config: &CompactionConfig,
+    active_model: &str,
 ) -> Result<(Vec<Message>, Option<SystemPrompt>, bool)> {
     if !config.enabled {
         return Ok((messages.to_vec(), system.clone(), false));
@@ -335,7 +354,8 @@ pub async fn maybe_compact(
     ));
 
     // Perform compaction
-    let (compacted_messages, summary_prompt) = compact_messages(client, messages, config).await?;
+    let (compacted_messages, summary_prompt) =
+        compact_messages(client, messages, config, active_model).await?;
 
     // Merge with original system prompt
     let merged_system = merge_system_prompts(system.as_ref(), summary_prompt);
