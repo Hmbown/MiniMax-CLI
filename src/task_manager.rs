@@ -1,7 +1,7 @@
-//! Persistent background task manager for DeepSeek agent work.
+//! Persistent background task manager for MiniMax agent work.
 //!
 //! Tasks are durable across restarts and execute with a bounded worker pool.
-//! Execution stays DeepSeek-only and now links every task to runtime
+//! Execution stays MiniMax-only and now links every task to runtime
 //! thread/turn records for unified timelines.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -311,7 +311,7 @@ pub trait TaskExecutor: Send + Sync {
     ) -> TaskExecutionResult;
 }
 
-/// Engine-backed executor (DeepSeek-only).
+/// Engine-backed executor (MiniMax-only).
 pub struct EngineTaskExecutor {
     runtime_threads: SharedRuntimeThreadManager,
 }
@@ -1359,11 +1359,7 @@ pub fn default_tasks_dir() -> PathBuf {
     {
         return PathBuf::from(path);
     }
-    if let Ok(path) = std::env::var("DEEPSEEK_TASKS_DIR")
-        && !path.trim().is_empty()
-    {
-        return PathBuf::from(path);
-    }
+    // Legacy env var support removed
     if let Some(home) = dirs::home_dir() {
         return home.join(".minimax").join("tasks");
     }
@@ -1445,7 +1441,7 @@ mod tests {
             data_dir: root,
             worker_count: 1,
             default_workspace: PathBuf::from("."),
-            default_model: "deepseek-v3.2".to_string(),
+            default_model: "MiniMax-M1".to_string(),
             default_mode: "agent".to_string(),
             allow_shell: false,
             trust_mode: false,
@@ -1455,7 +1451,7 @@ mod tests {
 
     #[tokio::test]
     async fn persists_and_recovers_task_records() -> Result<()> {
-        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("minimax-task-test-{}", Uuid::new_v4()));
         let manager =
             TaskManager::start_with_executor(test_config(root.clone()), Arc::new(MockExecutor))
                 .await?;
@@ -1481,7 +1477,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_running_task_marks_canceled() -> Result<()> {
-        let root = std::env::temp_dir().join(format!("deepseek-task-test-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("minimax-task-test-{}", Uuid::new_v4()));
         let manager =
             TaskManager::start_with_executor(test_config(root), Arc::new(MockExecutor)).await?;
 
